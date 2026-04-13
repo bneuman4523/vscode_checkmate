@@ -1,0 +1,587 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* LIGHT MODE */
+:root {
+  --button-outline: rgba(0,0,0, .10);
+  --badge-outline: rgba(0,0,0, .05);
+  --opaque-button-border-intensity: -8;
+  --elevate-1: rgba(0,0,0, .03);
+  --elevate-2: rgba(0,0,0, .08);
+  --background: 0 0% 100%;
+  --foreground: 0 0% 9%;
+  --border: 0 0% 91%;
+  --card: 0 0% 98%;
+  --card-foreground: 0 0% 9%;
+  --card-border: 0 0% 95%;
+  --sidebar: 0 0% 96%;
+  --sidebar-foreground: 0 0% 9%;
+  --sidebar-border: 0 0% 93%;
+  --sidebar-primary: 213 78% 19%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 149 58% 32%;
+  --sidebar-accent-foreground: 0 0% 100%;
+  --sidebar-ring: 213 78% 19%;
+  --popover: 0 0% 94%;
+  --popover-foreground: 0 0% 9%;
+  --popover-border: 0 0% 91%;
+  --primary: 213 78% 19%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217 6% 88%;
+  --secondary-foreground: 217 6% 12%;
+  --muted: 217 5% 90%;
+  --muted-foreground: 217 5% 35%;
+  --accent: 149 58% 32%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 42%;
+  --destructive-foreground: 0 84% 98%;
+  --input: 0 0% 75%;
+  --ring: 213 78% 19%;
+  --chart-1: 217 91% 35%;
+  --chart-2: 195 85% 38%;
+  --chart-3: 142 76% 32%;
+  --chart-4: 43 96% 42%;
+  --chart-5: 27 87% 48%;
+  --font-sans: "Inter", sans-serif;
+  --font-serif: Georgia, serif;
+  --font-mono: Menlo, monospace;
+  --radius: .5rem;
+  --shadow-2xs: 0px 2px 0px 0px hsl(217 91% 45% / 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(217 91% 45% / 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(217 91% 45% / 0.00), 0px 1px 2px -1px hsl(217 91% 45% / 0.00);
+  --shadow: 0px 2px 0px 0px hsl(217 91% 45% / 0.00), 0px 1px 2px -1px hsl(217 91% 45% / 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(217 91% 45% / 0.00), 0px 2px 4px -1px hsl(217 91% 45% / 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(217 91% 45% / 0.00), 0px 4px 6px -1px hsl(217 91% 45% / 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(217 91% 45% / 0.00), 0px 8px 10px -1px hsl(217 91% 45% / 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(217 91% 45% / 0.00);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+
+/* Fallback for older browsers */
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --sidebar-accent-border: hsl(var(--sidebar-accent));
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --secondary-border: hsl(var(--secondary));
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --muted-border: hsl(var(--muted));
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --accent-border: hsl(var(--accent));
+  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --destructive-border: hsl(var(--destructive));
+  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+.dark {
+  --button-outline: rgba(255,255,255, .10);
+  --badge-outline: rgba(255,255,255, .05);
+  --opaque-button-border-intensity: 9;
+  --elevate-1: rgba(255,255,255, .04);
+  --elevate-2: rgba(255,255,255, .09);
+  --background: 0 0% 7%;
+  --foreground: 0 0% 98%;
+  --border: 0 0% 16%;
+  --card: 0 0% 9%;
+  --card-foreground: 0 0% 98%;
+  --card-border: 0 0% 12%;
+  --sidebar: 0 0% 11%;
+  --sidebar-foreground: 0 0% 98%;
+  --sidebar-border: 0 0% 14%;
+  --sidebar-primary: 217 91% 55%;
+  --sidebar-primary-foreground: 217 91% 98%;
+  --sidebar-accent: 217 8% 16%;
+  --sidebar-accent-foreground: 217 8% 92%;
+  --sidebar-ring: 217 91% 55%;
+  --popover: 0 0% 13%;
+  --popover-foreground: 0 0% 98%;
+  --popover-border: 0 0% 16%;
+  --primary: 217 91% 32%;
+  --primary-foreground: 217 91% 98%;
+  --secondary: 217 6% 18%;
+  --secondary-foreground: 217 6% 95%;
+  --muted: 217 5% 17%;
+  --muted-foreground: 217 5% 70%;
+  --accent: 217 12% 15%;
+  --accent-foreground: 217 12% 92%;
+  --destructive: 0 84% 28%;
+  --destructive-foreground: 0 84% 98%;
+  --input: 0 0% 32%;
+  --ring: 217 91% 55%;
+  --chart-1: 217 91% 65%;
+  --chart-2: 195 85% 68%;
+  --chart-3: 142 76% 62%;
+  --chart-4: 43 96% 68%;
+  --chart-5: 27 87% 72%;
+  --shadow-2xs: 0px 2px 0px 0px hsl(217 91% 55% / 0.00);
+  --shadow-xs: 0px 2px 0px 0px hsl(217 91% 55% / 0.00);
+  --shadow-sm: 0px 2px 0px 0px hsl(217 91% 55% / 0.00), 0px 1px 2px -1px hsl(217 91% 55% / 0.00);
+  --shadow: 0px 2px 0px 0px hsl(217 91% 55% / 0.00), 0px 1px 2px -1px hsl(217 91% 55% / 0.00);
+  --shadow-md: 0px 2px 0px 0px hsl(217 91% 55% / 0.00), 0px 2px 4px -1px hsl(217 91% 55% / 0.00);
+  --shadow-lg: 0px 2px 0px 0px hsl(217 91% 55% / 0.00), 0px 4px 6px -1px hsl(217 91% 55% / 0.00);
+  --shadow-xl: 0px 2px 0px 0px hsl(217 91% 55% / 0.00), 0px 8px 10px -1px hsl(217 91% 55% / 0.00);
+  --shadow-2xl: 0px 2px 0px 0px hsl(217 91% 55% / 0.00);
+
+/* Fallback for older browsers */
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --sidebar-accent-border: hsl(var(--sidebar-accent));
+  --sidebar-accent-border: hsl(from hsl(var(--sidebar-accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(from hsl(var(--primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --secondary-border: hsl(var(--secondary));
+  --secondary-border: hsl(from hsl(var(--secondary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --muted-border: hsl(var(--muted));
+  --muted-border: hsl(from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --accent-border: hsl(var(--accent));
+  --accent-border: hsl(from hsl(var(--accent)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+
+  /* Fallback for older browsers */
+  --destructive-border: hsl(var(--destructive));
+  --destructive-border: hsl(from hsl(var(--destructive)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/**
+ * Using the elevate system.
+ * Automatic contrast adjustment.
+ *
+ * <element className="hover-elevate" />
+ * <element className="active-elevate-2" />
+ *
+ * // Using the tailwind utility when a data attribute is "on"
+ * <element className="toggle-elevate data-[state=on]:toggle-elevated" />
+ * // Or manually controlling the toggle state
+ * <element className="toggle-elevate toggle-elevated" />
+ *
+ * Elevation systems have to handle many states.
+ * - not-hovered, vs. hovered vs. active  (three mutually exclusive states)
+ * - toggled or not
+ * - focused or not (this is not handled with these utilities)
+ *
+ * Even without handling focused or not, this is six possible combinations that
+ * need to be distinguished from eachother visually.
+ */
+@layer utilities {
+
+  /* Hide ugly search cancel button in Chrome until we can style it properly */
+  input[type="search"]::-webkit-search-cancel-button {
+    @apply hidden;
+  }
+
+  /* Placeholder styling for contentEditable div */
+  [contenteditable][data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    pointer-events: none;
+  }
+
+  /* .no-default-hover-elevate/no-default-active-elevate is an escape hatch so consumers of
+   * buttons/badges can remove the automatic brightness adjustment on interactions
+   * and program their own. */
+  .no-default-hover-elevate {}
+
+  .no-default-active-elevate {}
+
+
+  /**
+   * Toggleable backgrounds go behind the content. Hoverable/active goes on top.
+   * This way they can stack/compound. Both will overlap the parent's borders!
+   * So borders will be automatically adjusted both on toggle, and hover/active,
+   * and they will be compounded.
+   */
+  .toggle-elevate::before,
+  .toggle-elevate-2::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    /*border-radius: inherit;   match rounded corners */
+    border-radius: inherit;
+    z-index: -1;
+    /* sits behind content but above backdrop */
+  }
+
+  .toggle-elevate.toggle-elevated::before {
+    background-color: var(--elevate-2);
+  }
+
+  /* If there's a 1px border, adjust the inset so that it covers that parent's border */
+  .border.toggle-elevate::before {
+    inset: -1px;
+  }
+
+  /* Does not work on elements with overflow:hidden! */
+  .hover-elevate:not(.no-default-hover-elevate),
+  .active-elevate:not(.no-default-active-elevate),
+  .hover-elevate-2:not(.no-default-hover-elevate),
+  .active-elevate-2:not(.no-default-active-elevate) {
+    position: relative;
+    z-index: 0;
+  }
+
+  .hover-elevate:not(.no-default-hover-elevate)::after,
+  .active-elevate:not(.no-default-active-elevate)::after,
+  .hover-elevate-2:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:not(.no-default-active-elevate)::after {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    /*border-radius: inherit;   match rounded corners */
+    border-radius: inherit;
+    z-index: 999;
+    /* sits in front of content */
+  }
+
+  .hover-elevate:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate:active:not(.no-default-active-elevate)::after {
+    background-color: var(--elevate-1);
+  }
+
+  .hover-elevate-2:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:active:not(.no-default-active-elevate)::after {
+    background-color: var(--elevate-2);
+  }
+
+  /* If there's a 1px border, adjust the inset so that it covers that parent's border */
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate-2:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate-2:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
+    inset: -1px;
+  }
+}
+
+/* ============================================
+   BADGE PRINTING STYLES
+   Cross-platform print support for Safari, Chrome, Firefox
+   
+   IMPORTANT: For exact badge size printing:
+   - Set Margins to "None" in print dialog
+   - Disable "Headers and footers" in More Settings
+   - Set Scale to 100%
+   ============================================ */
+
+/* Default @page rule - removes browser margins */
+@page {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Print-specific styles */
+@media print {
+  /* Hide all non-printable elements */
+  .no-print,
+  nav,
+  header,
+  footer,
+  aside,
+  button:not(.print-button),
+  .sidebar,
+  .toolbar,
+  .navigation,
+  [data-no-print="true"] {
+    display: none !important;
+  }
+
+  /* Reset html and body for print */
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    width: 100% !important;
+    height: 100% !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Badge print wrapper - centers the badge on the page */
+  .badge-print-wrapper {
+    display: flex !important;
+    justify-content: center !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Badge container print styles */
+  .badge-print-container {
+    width: auto !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Individual badge for printing */
+  .badge-printable {
+    page-break-after: always !important;
+    page-break-inside: avoid !important;
+    break-after: page !important;
+    break-inside: avoid !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    display: block !important;
+  }
+
+  /* Last badge should not have page break after */
+  .badge-printable:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* Ensure backgrounds print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Remove shadows and borders that don't look good in print */
+  .badge-printable * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* Force high-quality image rendering */
+  img {
+    image-rendering: -webkit-optimize-contrast !important;
+    image-rendering: crisp-edges !important;
+  }
+}
+
+/* Badge size presets using @page rule */
+/* Note: @page size has limited browser support - Chrome/Edge best, Firefox limited */
+
+/* Standard 4x3 inch badge */
+@page badge-4x3 {
+  size: 4in 3in;
+  margin: 0;
+}
+
+/* Standard 4x6 inch badge */
+@page badge-4x6 {
+  size: 4in 6in;
+  margin: 0;
+}
+
+/* Business card size badge */
+@page badge-card {
+  size: 3.5in 2.25in;
+  margin: 0;
+}
+
+/* Lanyard badge vertical */
+@page badge-lanyard {
+  size: 3in 4in;
+  margin: 0;
+}
+
+/* Custom badge sizes - set via CSS custom properties */
+.badge-size-4x3 { page: badge-4x3; }
+.badge-size-4x6 { page: badge-4x6; }
+.badge-size-card { page: badge-card; }
+.badge-size-lanyard { page: badge-lanyard; }
+
+/* Print preview styling */
+.print-preview-container {
+  background: #f5f5f5;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.print-preview-badge {
+  background: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+/* Browser compatibility indicator */
+.print-compatibility-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.print-compatibility-badge.supported {
+  background: hsl(142 76% 92%);
+  color: hsl(142 76% 32%);
+}
+
+.print-compatibility-badge.limited {
+  background: hsl(43 96% 92%);
+  color: hsl(43 96% 32%);
+}
+
+.print-compatibility-badge.unsupported {
+  background: hsl(0 84% 92%);
+  color: hsl(0 84% 32%);
+}
+
+/* Collapsed sidebar styling - Navy blue ribbon with white icons */
+[data-slot="sidebar"][data-state="collapsed"] [data-slot="sidebar-inner"] {
+  background: hsl(var(--primary));
+}
+
+/* Smooth transition for sidebar text/labels during collapse */
+[data-sidebar="menu-button"] span,
+[data-sidebar="group-label"],
+[data-sidebar="footer"] {
+  transition: opacity 0.15s ease-in-out;
+  opacity: 1;
+  overflow: hidden;
+}
+
+/* Hide everything except icons in collapsed sidebar */
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"] span,
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="group-label"],
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="footer"] {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* Show header logo centered in collapsed sidebar */
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="header"] {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  margin-bottom: 0.5rem;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="header"] img {
+  height: 32px;
+  width: 32px;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="content"] {
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 0.5rem;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"] {
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"]:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  position: relative;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"]:hover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: #2FB36D;
+  border-radius: 0 2px 2px 0;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"][data-active="true"] {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  position: relative;
+}
+
+[data-slot="sidebar"][data-state="collapsed"] [data-sidebar="menu-button"][data-active="true"]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: #2FB36D;
+  border-radius: 0 2px 2px 0;
+}
+
+.kiosk-scanner-container [id^="qr-reader-"] {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.kiosk-scanner-container [id^="qr-reader-"] video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 8px;
+}
+
+.kiosk-scanner-container [id^="qr-reader-"] img[alt="scan-region-shade"] {
+  display: none !important;
+}
+
+.kiosk-scanner-container [id$="__scan_region"] {
+  position: relative !important;
+  width: 100% !important;
+  min-height: 0 !important;
+}
+
+.kiosk-scanner-container [id$="__dashboard"] {
+  display: none !important;
+}
+

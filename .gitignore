@@ -1,0 +1,40 @@
+node_modules/
+dist/
+build/
+server/public
+vite.config.ts.*
+*.tar.gz
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Replit agent state & internal files
+.local/
+.agents/
+.upm/
+.replit_integration_files/
+.replit
+replit.md
+zipFile.zip
+*.replit_backup
+**/.agent_state_*.bin
+**/repl_state.bin
+**/filesystem_state.json
+**/rapid_build_success
+**/.latest.json
+
+# Uploaded/pasted assets (AI session artifacts)
+attached_assets/
+
+# Dev-only docs (not for GitHub)
+docs/Alpha-Feedback-Tracker.md
+docs/assistant-handoff/
+docs/DESIGN_BRIEF_Printer_Selection_UX.md
+docs/Checkmate_PRD.md
+DEMO_GUIDE.md
+design_guidelines.md

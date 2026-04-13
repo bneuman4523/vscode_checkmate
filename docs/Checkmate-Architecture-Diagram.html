@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Checkmate - System Architecture</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        background: #0b1929;
+        color: #e0e6ed;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 20px;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 600;
+        color: #fff;
+        margin-bottom: 8px;
+        letter-spacing: 0.5px;
+      }
+      .subtitle {
+        font-size: 13px;
+        color: #8b9db8;
+        margin-bottom: 32px;
+      }
+      .diagram {
+        position: relative;
+        width: 780px;
+        min-height: 960px;
+      }
+
+      /* Node styles */
+      .node {
+        position: absolute;
+        border-radius: 8px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.4;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 14px;
+        z-index: 2;
+      }
+      .node .label {
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .node .detail {
+        font-size: 10px;
+        opacity: 0.8;
+        margin-top: 2px;
+      }
+
+      /* Zone containers */
+      .zone {
+        position: absolute;
+        border: 1.5px solid;
+        border-radius: 10px;
+        z-index: 1;
+      }
+      .zone-label {
+        position: absolute;
+        top: -10px;
+        left: 16px;
+        background: #0b1929;
+        padding: 0 8px;
+        font-size: 11px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .zone-label .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+
+      /* Color themes */
+      .client-node {
+        background: #1a5c3a;
+        border: 1.5px solid #2fb36d;
+        color: #d4f5e2;
+        width: 120px;
+        height: 60px;
+      }
+      .proxy-node {
+        background: #1e3a5f;
+        border: 1.5px solid #4a90d9;
+        color: #c8dcef;
+        width: 240px;
+        height: 60px;
+      }
+      .app-node {
+        background: #1c2e4a;
+        border: 1.5px solid #5b7baa;
+        color: #c8dcef;
+        width: 160px;
+        height: 56px;
+      }
+      .scaling-node {
+        background: transparent;
+        border: 1.5px dashed #5b7baa;
+        color: #8b9db8;
+        width: 100px;
+        height: 56px;
+        font-style: italic;
+      }
+      .db-node {
+        background: #3d1f5c;
+        border: 1.5px solid #9b59b6;
+        color: #e4d1f5;
+        border-radius: 50%;
+        width: 130px;
+        height: 70px;
+      }
+      .storage-node {
+        background: #5c3d1f;
+        border: 1.5px solid #d4924a;
+        color: #f5e4d1;
+        border-radius: 50%;
+        width: 130px;
+        height: 70px;
+      }
+      .service-node {
+        background: #1a3d5c;
+        border: 1.5px solid #3498db;
+        color: #c8e0f5;
+        width: 140px;
+        height: 52px;
+      }
+      .external-node {
+        background: #2a1a3d;
+        border: 1.5px solid #8e44ad;
+        color: #d9bff0;
+        width: 130px;
+        height: 52px;
+      }
+      .print-node {
+        background: #3d3d1a;
+        border: 1.5px solid #d4c94a;
+        color: #f5f0d1;
+        width: 130px;
+        height: 52px;
+      }
+
+      /* Zones */
+      .dmz-zone {
+        border-color: #4a90d9;
+        left: 180px;
+        top: 115px;
+        width: 420px;
+        height: 90px;
+      }
+      .dmz-zone .zone-label {
+        color: #4a90d9;
+      }
+      .dmz-zone .dot {
+        background: #4a90d9;
+      }
+
+      .app-zone {
+        border-color: #5b7baa;
+        left: 100px;
+        top: 280px;
+        width: 580px;
+        height: 120px;
+      }
+      .app-zone .zone-label {
+        color: #5b7baa;
+      }
+      .app-zone .dot {
+        background: #5b7baa;
+      }
+
+      .services-zone {
+        border-color: #3498db;
+        left: 30px;
+        top: 490px;
+        width: 720px;
+        height: 120px;
+      }
+      .services-zone .zone-label {
+        color: #3498db;
+      }
+      .services-zone .dot {
+        background: #3498db;
+      }
+
+      .persistence-zone {
+        border-color: #9b59b6;
+        left: 220px;
+        top: 710px;
+        width: 340px;
+        height: 110px;
+      }
+      .persistence-zone .zone-label {
+        color: #9b59b6;
+      }
+      .persistence-zone .dot {
+        background: #9b59b6;
+      }
+
+      .external-zone {
+        border-color: #8e44ad;
+        left: 30px;
+        top: 860px;
+        width: 720px;
+        height: 90px;
+      }
+      .external-zone .zone-label {
+        color: #8e44ad;
+      }
+      .external-zone .dot {
+        background: #8e44ad;
+      }
+
+      /* Connection lines via SVG */
+      .connections {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        pointer-events: none;
+      }
+      .conn-line {
+        stroke: #3a5070;
+        stroke-width: 1.5;
+        fill: none;
+      }
+      .conn-label {
+        fill: #8b9db8;
+        font-size: 9px;
+        font-family: "Inter", sans-serif;
+      }
+
+      /* Footer */
+      .footer {
+        margin-top: 32px;
+        text-align: center;
+        font-size: 11px;
+        color: #5a7088;
+      }
+      .page-info {
+        font-size: 11px;
+        color: #5a7088;
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Checkmate - HRD &amp; HRS Architecture</h1>
+    <p class="subtitle">
+      Target Deployment Architecture &mdash; v1.0 &bull; February 2026
+    </p>
+
+    <div class="diagram">
+      <!-- SVG Connections -->
+      <svg
+        class="connections"
+        viewBox="0 0 780 960"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <marker id="arrow-down" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto">
+            <polygon points="0,0 8,3 0,6" fill="#3a5070" />
+          </marker>
+          <marker id="arrow-up" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto-start-reverse">
+            <polygon points="0,0 8,3 0,6" fill="#3a5070" />
+          </marker>
+          <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto">
+            <polygon points="0,0 8,3 0,6" fill="#2fb36d" />
+          </marker>
+          <marker id="arrow-green-rev" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto-start-reverse">
+            <polygon points="0,0 8,3 0,6" fill="#2fb36d" />
+          </marker>
+          <marker id="arrow-purple" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto">
+            <polygon points="0,0 8,3 0,6" fill="#9b59b6" />
+          </marker>
+          <marker id="arrow-purple-rev" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto-start-reverse">
+            <polygon points="0,0 8,3 0,6" fill="#9b59b6" />
+          </marker>
+          <marker id="arrow-ext" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto">
+            <polygon points="0,0 8,3 0,6" fill="#8e44ad" />
+          </marker>
+          <marker id="arrow-ext-rev" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="auto-start-reverse">
+            <polygon points="0,0 8,3 0,6" fill="#8e44ad" />
+          </marker>
+        </defs>
+
+        <!-- Client ↔ Reverse Proxy (bidirectional: requests down, responses up) -->
+        <line class="conn-line" x1="390" y1="70" x2="390" y2="115"
+              marker-start="url(#arrow-up)" marker-end="url(#arrow-down)" />
+        <text class="conn-label" x="398" y="98">HTTPS / 443</text>
+        <text class="conn-label" x="398" y="108" fill="#5a7088" font-size="8">↕ bidirectional</text>
+
+        <!-- Reverse Proxy → Frontend (one-way: serves static assets down) -->
+        <line class="conn-line" x1="310" y1="205" x2="250" y2="280"
+              marker-end="url(#arrow-down)" />
+        <text class="conn-label" x="232" y="250">Static Assets ↓</text>
+
+        <!-- Reverse Proxy ↔ API (bidirectional: requests/responses) -->
+        <line class="conn-line" x1="390" y1="205" x2="390" y2="280"
+              marker-start="url(#arrow-up)" marker-end="url(#arrow-down)" />
+        <text class="conn-label" x="398" y="242">HTTP / 5000</text>
+        <text class="conn-label" x="398" y="252" fill="#5a7088" font-size="8">↕ req/res</text>
+
+        <!-- Reverse Proxy ↔ API Replica (bidirectional) -->
+        <line class="conn-line" x1="470" y1="205" x2="530" y2="280"
+              marker-start="url(#arrow-up)" marker-end="url(#arrow-down)" />
+        <text class="conn-label" x="508" y="242">Round Robin</text>
+        <text class="conn-label" x="508" y="252" fill="#5a7088" font-size="8">↕ req/res</text>
+
+        <!-- App Layer → Services (one-way: invokes services) -->
+        <line class="conn-line" x1="210" y1="396" x2="130" y2="490"
+              marker-end="url(#arrow-down)" />
+        <line class="conn-line" x1="390" y1="396" x2="300" y2="490"
+              marker-end="url(#arrow-down)" />
+        <line class="conn-line" x1="390" y1="396" x2="480" y2="490"
+              marker-end="url(#arrow-down)" />
+        <line class="conn-line" x1="560" y1="396" x2="650" y2="490"
+              marker-end="url(#arrow-down)" />
+
+        <!-- Services ↔ Database (bidirectional: read/write) -->
+        <line class="conn-line" stroke="#9b59b6" stroke-width="1.5" x1="300" y1="610" x2="330" y2="710"
+              marker-start="url(#arrow-purple-rev)" marker-end="url(#arrow-purple)" />
+        <text class="conn-label" x="268" y="658">TCP / 5432</text>
+        <text class="conn-label" x="268" y="670">(SSL)</text>
+        <text class="conn-label" x="268" y="682" fill="#9b59b6" font-size="8">↕ read/write</text>
+
+        <!-- Services ↔ Object Storage (bidirectional: upload/download) -->
+        <line class="conn-line" stroke="#d4924a" stroke-width="1.5" x1="480" y1="610" x2="460" y2="710"
+              marker-start="url(#arrow-up)" marker-end="url(#arrow-down)" />
+        <text class="conn-label" x="468" y="658">HTTPS / 443</text>
+        <text class="conn-label" x="468" y="670" fill="#d4924a" font-size="8">↕ upload/download</text>
+
+        <!-- Auth Service → Twilio (one-way: send OTP codes) -->
+        <line class="conn-line" stroke="#8e44ad" stroke-width="1.5" x1="120" y1="572" x2="255" y2="875"
+              marker-end="url(#arrow-ext)" />
+
+        <!-- Auth Service → SendGrid/Resend (one-way: send emails) -->
+        <line class="conn-line" stroke="#8e44ad" stroke-width="1.5" x1="120" y1="572" x2="410" y2="875"
+              marker-end="url(#arrow-ext)" />
+
+        <!-- Sync Orchestrator ↔ Certain API (bidirectional: push/pull attendees) -->
+        <line class="conn-line" stroke="#8e44ad" stroke-width="1.5" x1="280" y1="572" x2="105" y2="875"
+              marker-start="url(#arrow-ext-rev)" marker-end="url(#arrow-ext)" />
+
+        <!-- Credential Manager → Certain API (one-way: OAuth tokens for sync) -->
+        <line class="conn-line" stroke="#8e44ad" stroke-width="1.2" x1="470" y1="572" x2="105" y2="895"
+              marker-end="url(#arrow-ext)" />
+
+        <!-- Print Service → PrintNode (one-way: send print jobs) -->
+        <line class="conn-line" stroke="#d4c94a" stroke-width="1.5" x1="650" y1="572" x2="565" y2="875"
+              marker-end="url(#arrow-ext)" />
+
+        <!-- Credential Manager → OpenAI (one-way: send prompts) -->
+        <line class="conn-line" stroke="#8e44ad" stroke-width="1.5" x1="470" y1="572" x2="690" y2="875"
+              marker-end="url(#arrow-ext)" />
+
+        <!-- Legend -->
+        <rect x="10" y="10" width="180" height="62" rx="6" fill="#0d2035" stroke="#2a3f57" stroke-width="1" />
+        <text x="20" y="26" fill="#8b9db8" font-size="9" font-family="Inter, sans-serif" font-weight="600">DATA FLOW LEGEND</text>
+        <line x1="20" y1="38" x2="50" y2="38" stroke="#3a5070" stroke-width="1.5"
+              marker-end="url(#arrow-down)" />
+        <text x="58" y="41" fill="#8b9db8" font-size="9" font-family="Inter, sans-serif">One-way flow</text>
+        <line x1="20" y1="54" x2="50" y2="54" stroke="#3a5070" stroke-width="1.5"
+              marker-start="url(#arrow-up)" marker-end="url(#arrow-down)" />
+        <text x="58" y="57" fill="#8b9db8" font-size="9" font-family="Inter, sans-serif">Bidirectional flow</text>
+      </svg>
+
+      <!-- Client Browser -->
+      <div class="node client-node" style="left: 330px; top: 10px">
+        <span class="label">User / Client</span>
+        <span class="detail">(Browser / Mobile)</span>
+      </div>
+
+      <!-- DMZ Zone -->
+      <div class="zone dmz-zone">
+        <div class="zone-label"><span class="dot"></span> DMZ Layer</div>
+      </div>
+      <div class="node proxy-node" style="left: 270px; top: 135px">
+        <span class="label">Reverse Proxy / Load Balancer</span>
+        <span class="detail">(Terminates SSL @ Port 443)</span>
+      </div>
+
+      <!-- Application Cluster Zone -->
+      <div class="zone app-zone">
+        <div class="zone-label">
+          <span class="dot"></span> Application Cluster (Stateless)
+        </div>
+      </div>
+      <div class="node scaling-node" style="left: 118px; top: 310px">
+        <span class="label">... Scaling<br />Nodes</span>
+      </div>
+      <div class="node app-node" style="left: 150px; top: 310px; width: 180px">
+        <span class="label">React SPA (Vite)</span>
+        <span class="detail">Static Assets / CDN</span>
+      </div>
+      <div class="node app-node" style="left: 310px; top: 310px; width: 180px">
+        <span class="label">Node.js / Express API</span>
+        <span class="detail">(TypeScript / Port 5000)</span>
+      </div>
+      <div class="node app-node" style="left: 480px; top: 310px; width: 180px">
+        <span class="label">Node.js / Express API</span>
+        <span class="detail">(Replica / Port 5000)</span>
+      </div>
+
+      <!-- Internal Services Zone -->
+      <div class="zone services-zone">
+        <div class="zone-label">
+          <span class="dot"></span> Internal Services Layer
+        </div>
+      </div>
+      <div class="node service-node" style="left: 50px; top: 520px">
+        <span class="label">Auth Service</span>
+        <span class="detail">OIDC / SMS OTP / Email OTP</span>
+      </div>
+      <div class="node service-node" style="left: 210px; top: 520px">
+        <span class="label">Sync Orchestrator</span>
+        <span class="detail">Scheduler + Dead Letter Q</span>
+      </div>
+      <div class="node service-node" style="left: 400px; top: 520px">
+        <span class="label">Credential Manager</span>
+        <span class="detail">AES-256-GCM Encryption</span>
+      </div>
+      <div class="node service-node" style="left: 580px; top: 520px">
+        <span class="label">Print Service</span>
+        <span class="detail">Browser / PrintNode / Zebra</span>
+      </div>
+
+      <!-- Persistence Zone -->
+      <div class="zone persistence-zone">
+        <div class="zone-label"><span class="dot"></span> Persistence Zone</div>
+      </div>
+      <div class="node db-node" style="left: 240px; top: 725px">
+        <span class="label">PostgreSQL</span>
+        <span class="detail">(Neon Serverless)<br />Port: 5432</span>
+      </div>
+      <div class="node storage-node" style="left: 415px; top: 725px">
+        <span class="label">Object Storage</span>
+        <span class="detail">(Assets &amp; Uploads)</span>
+      </div>
+
+      <!-- External Integrations Zone -->
+      <div class="zone external-zone">
+        <div class="zone-label">
+          <span class="dot"></span> External Integrations
+        </div>
+      </div>
+      <div class="node external-node" style="left: 40px; top: 875px">
+        <span class="label">Certain API</span>
+        <span class="detail">Events / Attendees</span>
+      </div>
+      <div class="node external-node" style="left: 190px; top: 875px">
+        <span class="label">Twilio</span>
+        <span class="detail">SMS / OTP</span>
+      </div>
+      <div
+        class="node external-node"
+        style="left: 340px; top: 875px; width: 140px"
+      >
+        <span class="label">SendGrid / Resend</span>
+        <span class="detail">Email / OTP Backup</span>
+      </div>
+      <div class="node print-node" style="left: 500px; top: 875px">
+        <span class="label">PrintNode</span>
+        <span class="detail">Cloud Printing</span>
+      </div>
+      <div
+        class="node external-node"
+        style="left: 640px; top: 875px; width: 100px"
+      >
+        <span class="label">OpenAI</span>
+        <span class="detail">Badge AI</span>
+      </div>
+    </div>
+
+    <p class="page-info">
+      Checkmate &mdash; High-Level Requirements Document &bull; Page 6 of 13
+    </p>
+    <p class="footer">&copy; 2026 Checkmate Event Systems. Confidential.</p>
+  </body>
+</html>
