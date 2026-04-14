@@ -30,12 +30,14 @@ export function getSession() {
     ttl: sessionTtl,
     tableName: "auth_sessions",
   });
-  
-  // Determine cookie settings based on environment:
-  // - Development (Replit iframe): needs sameSite="none" + secure=true for cross-origin cookies
-  // - Production: use sameSite="lax" for better OIDC redirect compatibility
+
+  // Cookie settings:
+  // - Production: secure+lax for OIDC redirect compatibility
+  // - Replit iframe dev: secure+none for cross-origin cookies
+  // - Local dev (no REPL_ID): insecure+lax so cookies work over http://localhost
   const isProduction = process.env.NODE_ENV === "production";
-  
+  const isReplit = !!process.env.REPL_ID;
+
   return session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
@@ -43,11 +45,24 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
-      sameSite: isProduction ? "lax" : "none",
+      secure: isProduction || isReplit,
+      sameSite: isProduction ? "lax" : (isReplit ? "none" : "lax"),
       maxAge: sessionTtl,
     },
   });
+}
+
+export function setupLocalAuth(app: Express) {
+  app.set("trust proxy", 1);
+  app.use(getSession());
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  passport.serializeUser((user: Express.User, cb) => {
+    const { access_token, ...safeUser } = user as any;
+    cb(null, safeUser);
+  });
+  passport.deserializeUser((user: Express.User, cb) => cb(null, user));
 }
 
 function updateUserSession(

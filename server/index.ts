@@ -5,7 +5,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import { setupAuth } from "./replitAuth";
+import { setupAuth, setupLocalAuth } from "./replitAuth";
 
 const logger = createChildLogger('Server');
 
@@ -178,7 +178,12 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  await setupAuth(app);
+  if (process.env.REPL_ID) {
+    await setupAuth(app);
+  } else {
+    setupLocalAuth(app);
+    log("Local auth setup (session + passport). Replit OIDC skipped. Use email/SMS OTP.");
+  }
   const server = await registerRoutes(app);
 
   app.use(async (err: any, _req: Request, res: Response, _next: NextFunction) => {
