@@ -41,10 +41,11 @@ import { kioskPreCacheService, PreCacheProgress } from "@/services/kiosk-precach
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import type { Attendee, Event, BadgeTemplate } from "@shared/schema";
+import type { Attendee, Event, BadgeTemplate, KioskBrandingConfig } from "@shared/schema";
 import type { OfflineAttendee } from "@/lib/offline-db";
 import type { KioskSettings } from "@/components/KioskLauncher";
 import type { SelectedPrinter } from "@/lib/printerPreferences";
+import KioskBrandingHeader from "@/components/KioskBrandingHeader";
 import { getSavedPrinter } from "@/lib/printerPreferences";
 import { useTheme } from "@/components/ThemeProvider";
 import { useIdleTimeout } from "@/hooks/useIdleTimeout";
@@ -111,6 +112,7 @@ export default function KioskMode({
   const [walkinSubmitting, setWalkinSubmitting] = useState(false);
   const [logoTapCount, setLogoTapCount] = useState(0);
   const [securityError, setSecurityError] = useState<string | null>(null);
+  const [branding, setBranding] = useState<KioskBrandingConfig | null>(null);
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const networkPrint = useNetworkPrint();
@@ -119,17 +121,17 @@ export default function KioskMode({
   const previousThemeRef = useRef(appTheme);
 
   useEffect(() => {
-    const kioskTheme = kioskSettings?.kioskTheme;
+    const kioskTheme = branding?.kioskTheme || kioskSettings?.kioskTheme;
     if (kioskTheme) {
       previousThemeRef.current = appTheme;
       setTheme(kioskTheme);
     }
     return () => {
-      if (kioskSettings?.kioskTheme) {
+      if (branding?.kioskTheme || kioskSettings?.kioskTheme) {
         setTheme(previousThemeRef.current);
       }
     };
-  }, []);
+  }, [branding?.kioskTheme]);
 
   const [isOnline, setIsOnline] = useState(offlineCheckinService.getOnlineStatus());
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
@@ -174,6 +176,13 @@ export default function KioskMode({
       if (status.cached) {
         const cached = await kioskPreCacheService.getCachedAttendees(eventId);
         setOfflineAttendees(cached);
+        // Load cached branding if not already set (e.g. when offline)
+        if (!branding) {
+          const cachedBranding = await kioskPreCacheService.getCachedBranding(eventId);
+          if (cachedBranding) {
+            setBranding(cachedBranding);
+          }
+        }
       }
     }
   };
@@ -201,6 +210,9 @@ export default function KioskMode({
           const res = await fetch(`/api/kiosk/${eventId}/launch-info`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
+          if (data.branding) {
+            setBranding(data.branding as KioskBrandingConfig);
+          }
           return data.event as Event;
         },
         enabled: Boolean(eventId),
@@ -927,18 +939,12 @@ export default function KioskMode({
     <div className="min-h-screen bg-background flex flex-col">
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-2xl">
-          <div className="text-center mb-8">
-            <div 
-              className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary mb-4 cursor-pointer select-none"
-              onClick={handleLogoTap}
-              data-testid="kiosk-logo"
-            >
-              <QrCode className="h-8 w-8 text-primary-foreground" />
-            </div>
-            <h1 className="text-4xl font-semibold mb-2" data-testid="text-event-name">
-              {eventName || "Self Check-In"}
-            </h1>
-            <p className="text-lg text-muted-foreground">Quick and easy badge printing</p>
+          <KioskBrandingHeader
+            branding={branding}
+            eventName={eventName || "Self Check-In"}
+            onLogoTap={handleLogoTap}
+            fallbackIcon={<QrCode className="h-8 w-8 text-primary-foreground" />}
+          >
             {eventId && (
               <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
                 <Badge variant="secondary" data-testid="badge-checkin-count">
@@ -965,7 +971,7 @@ export default function KioskMode({
                 )}
               </div>
             )}
-          </div>
+          </KioskBrandingHeader>
 
           <Card className="border-2">
             <CardContent className="p-12">
