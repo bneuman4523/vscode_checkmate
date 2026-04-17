@@ -1,14 +1,14 @@
-# CheckinKit (Checkmate) SDLC Compliance Document
+# CheckinKit (Greet) SDLC Compliance Document
 
 **Last Updated:** January 29, 2026  
 **Reference:** Certain Platform SDLC v202412003  
-**Project:** CheckinKit / Checkmate - Event Registration & Check-In Platform
+**Project:** CheckinKit / Greet - Event Registration & Check-In Platform
 
 ---
 
 ## Executive Summary
 
-This document outlines how CheckinKit (branded as "Checkmate") adheres to the Certain Platform SDLC guidelines. The project follows established best practices for quality, security, and release management while adapting certain processes to the Replit development environment.
+This document outlines how CheckinKit (branded as "Greet") adheres to the Certain Platform SDLC guidelines. The project follows established best practices for quality, security, and release management while adapting certain processes to the Replit development environment.
 
 ---
 

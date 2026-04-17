@@ -163,11 +163,11 @@ class CheckinSyncService {
       checkInDate: checkinDate,
       badgePrintedDate: badgePrintedDate,
       entryType: "On-site",
-      createdBy: checkedInBy || "Checkmate",
-      modifiedBy: checkedInBy || "Checkmate",
+      createdBy: checkedInBy || "Greet",
+      modifiedBy: checkedInBy || "Greet",
       dateCreated: now,
       dateModified: now,
-      source: "Checkmate",
+      source: "Greet",
     });
     return this.sendWithRetry(payload, integration, config, attendee, event);
   }
@@ -193,7 +193,7 @@ class CheckinSyncService {
     const checkinDate = attendee.checkedInAt
       ? new Date(attendee.checkedInAt).toISOString().replace('Z', '').split('.')[0]
       : now;
-    const source = config.walkinSource || "Checkmate";
+    const source = config.walkinSource || "Greet";
 
     const payload: CertainRegistrationPayload = {
       profile: {

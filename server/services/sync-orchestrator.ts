@@ -729,7 +729,7 @@ class SyncOrchestrator {
         }
         const tagged: any[] = [];
         for (const evt of events) {
-          if (this.hasCheckmateTag(evt)) {
+          if (this.hasGreetTag(evt)) {
             tagged.push(evt);
           } else {
             const eid = evt.eventCode || evt.event_code || evt.eventId || evt.id;
@@ -1024,7 +1024,7 @@ class SyncOrchestrator {
     };
   }
 
-  private hasCheckmateTag(rawEvent: any): boolean {
+  private hasGreetTag(rawEvent: any): boolean {
     let tags = rawEvent?.tags?.tag;
     if (!tags && Array.isArray(rawEvent?.tags)) {
       tags = rawEvent.tags;

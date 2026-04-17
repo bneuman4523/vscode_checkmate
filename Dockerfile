@@ -1,5 +1,5 @@
 # ===============================================
-# CheckinKit (Checkmate) Production Dockerfile
+# CheckinKit (Greet) Production Dockerfile
 # Multi-stage build for optimized image size
 # ===============================================
 

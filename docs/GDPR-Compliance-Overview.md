@@ -1,14 +1,14 @@
-# Checkmate — GDPR & Data Privacy Compliance Overview
+# Greet — GDPR & Data Privacy Compliance Overview
 
 **Last Updated:** April 2026
-**Product:** Checkmate (Event Registration & Check-In Platform)
+**Product:** Greet (Event Registration & Check-In Platform)
 **Data Role:** Data Processor (on behalf of event organizers who act as Data Controllers)
 
 ---
 
 ## 1. Architecture & Data Protection by Design
 
-Checkmate is built with privacy-by-design principles in accordance with GDPR Article 25.
+Greet is built with privacy-by-design principles in accordance with GDPR Article 25.
 
 ### Tenant Isolation
 - All data is strictly separated per customer account at the database level using row-level tenant isolation via `customer_id`.
@@ -34,7 +34,7 @@ Checkmate is built with privacy-by-design principles in accordance with GDPR Art
 
 ## 2. Data Minimization
 
-Checkmate collects and processes only the minimum personal data necessary for event check-in and badge printing operations.
+Greet collects and processes only the minimum personal data necessary for event check-in and badge printing operations.
 
 ### Attendee Data Stored
 | Field | Purpose | Required |
@@ -60,7 +60,7 @@ Checkmate collects and processes only the minimum personal data necessary for ev
 
 ## 3. Automated Data Retention
 
-Checkmate includes a built-in data retention engine to support GDPR storage limitation requirements (Article 5(1)(e)).
+Greet includes a built-in data retention engine to support GDPR storage limitation requirements (Article 5(1)(e)).
 
 ### Account-Level Policy
 Administrators can configure a retention policy per customer account:
@@ -92,10 +92,10 @@ A background worker runs daily to:
 
 ## 4. Remote / Offsite Printing
 
-Checkmate supports both local browser-based printing and remote cloud printing via PrintNode. When using remote printing:
+Greet supports both local browser-based printing and remote cloud printing via PrintNode. When using remote printing:
 
 ### Data in Transit
-- All communication between Checkmate and PrintNode uses TLS encryption.
+- All communication between Greet and PrintNode uses TLS encryption.
 - Only badge-relevant fields are transmitted — not the full attendee record.
 
 ### Access Control
@@ -114,7 +114,7 @@ Checkmate supports both local browser-based printing and remote cloud printing v
 
 ## 5. Consent & Legal Basis
 
-Checkmate is a **data processor**. The legal basis for collecting and processing attendee data is determined by the event organizer (data controller), not by Checkmate.
+Greet is a **data processor**. The legal basis for collecting and processing attendee data is determined by the event organizer (data controller), not by Greet.
 
 ### Typical Legal Bases Used by Event Organizers
 - **Legitimate interest** — Managing event attendance, safety, and logistics.
@@ -124,15 +124,15 @@ Checkmate is a **data processor**. The legal basis for collecting and processing
 ### Recommendations for Event Organizers
 - Include session attendance tracking and badge data collection in your event privacy notice.
 - Ensure your registration terms reference the use of check-in and badge printing technology.
-- Configure retention policies in Checkmate to align with your organization's data retention schedule.
+- Configure retention policies in Greet to align with your organization's data retention schedule.
 
 ---
 
 ## 6. Data Subject Rights
 
-Checkmate provides the tools necessary for data controllers to fulfill data subject requests:
+Greet provides the tools necessary for data controllers to fulfill data subject requests:
 
-| Right | How Checkmate Supports It |
+| Right | How Greet Supports It |
 |-------|---------------------------|
 | **Access** (Art. 15) | Attendee data is searchable and exportable by authorized administrators. |
 | **Rectification** (Art. 16) | Attendee records can be edited by authorized administrators. |
@@ -168,14 +168,14 @@ Checkmate provides the tools necessary for data controllers to fulfill data subj
 | Legal basis for data collection | Event Organizer (Controller) |
 | Privacy notice to attendees | Event Organizer (Controller) |
 | Data Processing Agreement (DPA) | Business/Legal teams |
-| Data retention policy configuration | Event Organizer (via Checkmate admin UI) |
+| Data retention policy configuration | Event Organizer (via Greet admin UI) |
 | Sub-processor documentation | Event Organizer (Controller) |
-| Technical security controls | Checkmate (Processor) |
-| Encryption at rest and in transit | Checkmate (Processor) |
-| Tenant isolation and access control | Checkmate (Processor) |
-| Automated retention and anonymization | Checkmate (Processor) |
+| Technical security controls | Greet (Processor) |
+| Encryption at rest and in transit | Greet (Processor) |
+| Tenant isolation and access control | Greet (Processor) |
+| Automated retention and anonymization | Greet (Processor) |
 | Physical badge disposal at offsite locations | Event Organizer (Controller) |
 
 ---
 
-*This document is provided for informational purposes and describes the technical capabilities of the Checkmate platform. It is not legal advice. Event organizers should consult with their legal or data protection teams to ensure their use of Checkmate complies with applicable regulations.*
+*This document is provided for informational purposes and describes the technical capabilities of the Greet platform. It is not legal advice. Event organizers should consult with their legal or data protection teams to ensure their use of Greet complies with applicable regulations.*

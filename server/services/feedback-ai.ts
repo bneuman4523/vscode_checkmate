@@ -70,7 +70,7 @@ export async function analyzeFeedback(
     avgMs: a.avgDurationMs,
   }));
 
-  const prompt = `You are a product analytics expert analyzing beta feedback and usage data for an event check-in and badge printing application called "Checkmate".
+  const prompt = `You are a product analytics expert analyzing beta feedback and usage data for an event check-in and badge printing application called "Greet".
 
 Analyze the following data and return a JSON object with these fields:
 - themes: Array of {theme, count, description} - Common themes across feedback (max 5)
@@ -143,7 +143,7 @@ export async function converseFeedback(
   const userMessages = transcript.filter(t => t.role === "user");
   const forceFinalize = userMessages.length >= 3;
 
-  const prompt = `You are a friendly feedback assistant for "Checkmate", an enterprise event check-in and badge printing application currently in beta testing. Your goal is to help users share feedback naturally in a conversational way.
+  const prompt = `You are a friendly feedback assistant for "Greet", an enterprise event check-in and badge printing application currently in beta testing. Your goal is to help users share feedback naturally in a conversational way.
 
 RULES:
 - Be warm, concise, and professional. Keep responses to 1-3 sentences max.
@@ -155,7 +155,7 @@ RULES:
 - Maximum 2 follow-up questions total. If this is the 2nd follow-up, always mark isFinal=true.
 - The summary should combine all user messages into a clear, well-written feedback description.
 
-${isFirstTurn ? `This is the start of the conversation. Greet the user with "${timeGreeting}${userName ? ", " + userName : ""}" and ask what's on their mind about Checkmate. Set isFinal=false, category=null, severity=null, summary=null.` : ""}
+${isFirstTurn ? `This is the start of the conversation. Greet the user with "${timeGreeting}${userName ? ", " + userName : ""}" and ask what's on their mind about Greet. Set isFinal=false, category=null, severity=null, summary=null.` : ""}
 ${forceFinalize ? "IMPORTANT: This is the final turn. You MUST set isFinal=true and provide a complete summary of all user feedback. Thank the user and let them know their feedback is ready to submit." : ""}
 
 USER CONTEXT:
@@ -213,7 +213,7 @@ export async function analyzeUrgentFeedback(entry: {
   userRole?: string;
   customerName?: string;
 }): Promise<UrgentFeedbackAnalysis> {
-  const prompt = `You are a senior product engineer reviewing urgent feedback for "Checkmate", an enterprise event check-in and badge printing application currently in alpha/beta testing.
+  const prompt = `You are a senior product engineer reviewing urgent feedback for "Greet", an enterprise event check-in and badge printing application currently in alpha/beta testing.
 
 A user has submitted urgent feedback that needs immediate attention. Analyze it and provide:
 
@@ -231,7 +231,7 @@ FEEDBACK:
 - User Role: ${entry.userRole || "unknown"}
 - Customer: ${entry.customerName || "unknown"}
 
-Context about Checkmate: It's an event registration and check-in system with badge printing, QR scanning, multi-tenant accounts, staff/admin roles, offline support, and external ticketing platform integrations.
+Context about Greet: It's an event registration and check-in system with badge printing, QR scanning, multi-tenant accounts, staff/admin roles, offline support, and external ticketing platform integrations.
 
 Return ONLY valid JSON matching the schema. No markdown, no code blocks.`;
 

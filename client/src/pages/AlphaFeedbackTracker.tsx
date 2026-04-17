@@ -4,61 +4,26 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, FileText, CheckCircle2, Clock, AlertCircle, ClipboardList, Lightbulb, RefreshCw } from "lucide-react";
+import { Loader2, FileText, CheckCircle2, Clock, AlertCircle, ClipboardList, Lightbulb, Bell, ArrowRight, XCircle } from "lucide-react";
 import { useMemo } from "react";
 
 function parseStats(content: string) {
-  const lines = content.split('\n');
-  const seenItems = new Set<string>();
-  let resolved = 0;
-  let awaitingUat = 0;
-  let inProgress = 0;
-  let planned = 0;
-  let open = 0;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('|')) continue;
-
-    let itemKey: string | null = null;
-
-    const batchMatch = trimmed.match(/^\|\s*(\d+)\s*\|/);
-    if (batchMatch) {
-      itemKey = `batch-${batchMatch[1]}`;
-    }
-
-    if (!itemKey) {
-      const testerMatch = trimmed.match(/^\|\s*([A-Z]\d+)\s*\|/);
-      if (testerMatch) {
-        itemKey = testerMatch[1];
-      }
-    }
-
-    if (!itemKey || seenItems.has(itemKey)) continue;
-    seenItems.add(itemKey);
-
-    if (/🔄|:arrows_counterclockwise:|🔔|:bell:/.test(trimmed)) {
-      awaitingUat++;
-    } else if (/✅|:white_check_mark:/.test(trimmed)) {
-      resolved++;
-    } else if (/⏳|:hourglass_flowing_sand:/.test(trimmed)) {
-      inProgress++;
-    } else if (/📋|:clipboard:/.test(trimmed)) {
-      planned++;
-    } else {
-      open++;
-    }
-  }
-
-  const totalItems = resolved + awaitingUat + inProgress + planned + open;
+  const totalMatch = content.match(/\*\*Total items:\s*(\d+)\*\*/);
+  const verifiedMatch = content.match(/\*\*Verified:\s*(\d+)\*\*/);
+  const pendingMatch = content.match(/\*\*Pending UAT:\s*(\d+)\*\*/);
+  const bugsMatch = content.match(/\*\*Open bugs:\s*(\d+)\*\*/);
+  const plannedMatch = content.match(/\*\*Planned:\s*(\d+)\*\*/);
+  const deferredMatch = content.match(/\*\*Deferred:\s*(\d+)\*\*/);
+  const featuresMatch = content.match(/\*\*Planned features:\s*(\d+)\*\*/);
 
   return {
-    resolved,
-    awaitingUat,
-    inProgress,
-    planned,
-    open,
-    totalItems,
+    totalItems: totalMatch ? parseInt(totalMatch[1]) : 0,
+    verified: verifiedMatch ? parseInt(verifiedMatch[1]) : 0,
+    pendingUat: pendingMatch ? parseInt(pendingMatch[1]) : 0,
+    openBugs: bugsMatch ? parseInt(bugsMatch[1]) : 0,
+    planned: plannedMatch ? parseInt(plannedMatch[1]) : 0,
+    deferred: deferredMatch ? parseInt(deferredMatch[1]) : 0,
+    plannedFeatures: featuresMatch ? parseInt(featuresMatch[1]) : 0,
   };
 }
 
@@ -80,17 +45,17 @@ function renderSeverityBadge(text: string) {
 }
 
 function renderStatusCell(text: string) {
-  if (text.includes("🔄") || text.includes(":arrows_counterclockwise:")) {
-    const cleaned = text.replace(/🔄\s*|:arrows_counterclockwise:\s*/g, "");
+  if (text.includes("🔔")) {
+    const cleaned = text.replace(/🔔\s*/g, "");
     return (
-      <span className="inline-flex items-center gap-1.5 text-purple-600 dark:text-purple-400 font-medium">
-        <RefreshCw className="h-4 w-4 flex-shrink-0" />
+      <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-medium">
+        <Bell className="h-4 w-4 flex-shrink-0" />
         <span>{cleaned}</span>
       </span>
     );
   }
-  if (text.includes("✅") || text.includes(":white_check_mark:")) {
-    const cleaned = text.replace(/✅\s*|:white_check_mark:\s*/g, "");
+  if (text.includes("✅")) {
+    const cleaned = text.replace(/✅\s*/g, "");
     return (
       <span className="inline-flex items-center gap-1.5 text-[#2FB36D] font-medium">
         <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
@@ -98,8 +63,8 @@ function renderStatusCell(text: string) {
       </span>
     );
   }
-  if (text.includes("⏳") || text.includes(":hourglass_flowing_sand:")) {
-    const cleaned = text.replace(/⏳\s*|:hourglass_flowing_sand:\s*/g, "");
+  if (text.includes("⏳")) {
+    const cleaned = text.replace(/⏳\s*/g, "");
     return (
       <span className="inline-flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400 font-medium">
         <Clock className="h-4 w-4 flex-shrink-0" />
@@ -107,8 +72,8 @@ function renderStatusCell(text: string) {
       </span>
     );
   }
-  if (text.includes("📋") || text.includes(":clipboard:")) {
-    const cleaned = text.replace(/📋\s*|:clipboard:\s*/g, "");
+  if (text.includes("📋")) {
+    const cleaned = text.replace(/📋\s*/g, "");
     return (
       <span className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-medium">
         <ClipboardList className="h-4 w-4 flex-shrink-0" />
@@ -116,14 +81,41 @@ function renderStatusCell(text: string) {
       </span>
     );
   }
+  if (text.includes("🔜")) {
+    const cleaned = text.replace(/🔜\s*/g, "");
+    return (
+      <span className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400 font-medium">
+        <ArrowRight className="h-4 w-4 flex-shrink-0" />
+        <span>{cleaned}</span>
+      </span>
+    );
+  }
+  if (text.includes("⚠️")) {
+    const cleaned = text.replace(/⚠️\s*/g, "");
+    return (
+      <span className="inline-flex items-center gap-1.5 text-orange-500 dark:text-orange-400 font-medium">
+        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+        <span>{cleaned}</span>
+      </span>
+    );
+  }
+  if (text.includes("❌")) {
+    const cleaned = text.replace(/❌\s*/g, "");
+    return (
+      <span className="inline-flex items-center gap-1.5 text-red-600 dark:text-red-400 font-medium">
+        <XCircle className="h-4 w-4 flex-shrink-0" />
+        <span>{cleaned}</span>
+      </span>
+    );
+  }
   return null;
 }
 
-export default function AlphaFeedbackTracker() {
+export default function BetaFeedbackTracker() {
   const { data, isLoading, error } = useQuery<{ content: string }>({
-    queryKey: ["/api/admin/alpha-feedback-tracker"],
+    queryKey: ["/api/admin/beta-feedback-tracker"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/alpha-feedback-tracker");
+      const res = await apiRequest("GET", "/api/admin/beta-feedback-tracker");
       return res.json();
     },
   });
@@ -145,7 +137,7 @@ export default function AlphaFeedbackTracker() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] text-muted-foreground gap-3">
         <AlertCircle className="h-12 w-12 opacity-40" />
-        <p>Failed to load the Alpha Feedback Tracker.</p>
+        <p>Failed to load the Beta Feedback Tracker.</p>
       </div>
     );
   }
@@ -156,69 +148,78 @@ export default function AlphaFeedbackTracker() {
         <div className="flex items-center gap-3 mb-1">
           <FileText className="h-7 w-7 text-[#0B2958] dark:text-white" />
           <h1 className="text-2xl font-bold text-[#0B2958] dark:text-white">
-            Alpha Feedback Tracker
+            Beta Feedback Tracker
           </h1>
           <Badge variant="outline" className="text-xs border-[#2FB36D] text-[#2FB36D]">
-            Alpha
+            Beta
           </Badge>
         </div>
         <p className="text-muted-foreground text-sm ml-10">
-          Tracking all feedback items received during alpha testing — updated live from the project docs.
+          Consolidated feedback from all testing phases — alpha, beta, partner, and security — updated live.
         </p>
       </div>
 
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           <Card className="border-l-4 border-l-[#2FB36D]">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <CheckCircle2 className="h-4 w-4 text-[#2FB36D]" />
-                Resolved
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <CheckCircle2 className="h-3.5 w-3.5 text-[#2FB36D]" />
+                Verified
               </div>
-              <p className="text-2xl font-bold text-[#2FB36D]">{stats.resolved}</p>
+              <p className="text-2xl font-bold text-[#2FB36D]">{stats.verified}</p>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500">
+          <Card className="border-l-4 border-l-amber-500">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <RefreshCw className="h-4 w-4 text-purple-500" />
-                Awaiting UAT
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <Bell className="h-3.5 w-3.5 text-amber-500" />
+                Pending UAT
               </div>
-              <p className="text-2xl font-bold text-purple-500">{stats.awaitingUat}</p>
+              <p className="text-2xl font-bold text-amber-500">{stats.pendingUat}</p>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-yellow-500">
+          <Card className="border-l-4 border-l-red-500">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <Clock className="h-4 w-4 text-yellow-500" />
-                In Progress
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <XCircle className="h-3.5 w-3.5 text-red-500" />
+                Open Bugs
               </div>
-              <p className="text-2xl font-bold text-yellow-500">{stats.inProgress}</p>
+              <p className="text-2xl font-bold text-red-500">{stats.openBugs}</p>
             </CardContent>
           </Card>
           <Card className="border-l-4 border-l-blue-500">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <ClipboardList className="h-4 w-4 text-blue-500" />
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <ClipboardList className="h-3.5 w-3.5 text-blue-500" />
                 Planned
               </div>
               <p className="text-2xl font-bold text-blue-500">{stats.planned}</p>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-orange-400">
+          <Card className="border-l-4 border-l-purple-500">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <Lightbulb className="h-4 w-4 text-orange-400" />
-                Open
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <Lightbulb className="h-3.5 w-3.5 text-purple-500" />
+                Features
               </div>
-              <p className="text-2xl font-bold text-orange-400">{stats.open}</p>
+              <p className="text-2xl font-bold text-purple-500">{stats.plannedFeatures}</p>
+            </CardContent>
+          </Card>
+          <Card className="border-l-4 border-l-slate-400">
+            <CardContent className="pt-4 pb-4 px-4">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
+                Deferred
+              </div>
+              <p className="text-2xl font-bold text-slate-400">{stats.deferred}</p>
             </CardContent>
           </Card>
           <Card className="border-l-4 border-l-[#0B2958] dark:border-l-white">
             <CardContent className="pt-4 pb-4 px-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                <FileText className="h-4 w-4 text-[#0B2958] dark:text-white" />
-                Total Items
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-1">
+                <FileText className="h-3.5 w-3.5 text-[#0B2958] dark:text-white" />
+                Total
               </div>
               <p className="text-2xl font-bold text-[#0B2958] dark:text-white">{stats.totalItems}</p>
             </CardContent>

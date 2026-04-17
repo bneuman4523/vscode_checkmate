@@ -182,7 +182,7 @@ export default function Login() {
     >
       <Card className="w-full max-w-md bg-background/95 backdrop-blur-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Welcome to Checkmate</CardTitle>
+          <CardTitle className="text-2xl">Welcome to Greet</CardTitle>
           <CardDescription>
             {step === 'phone' && "Enter your phone number to sign in"}
             {step === 'code' && "Enter the code sent to your phone"}

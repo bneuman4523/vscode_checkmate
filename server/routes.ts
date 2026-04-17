@@ -390,7 +390,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user.phoneNumber) {
         const { smsService } = await import('./services/sms-service');
         if (smsService.isConfigured()) {
-          const message = `Your Checkmate login code is: ${code}\n\nThis code expires in 10 minutes.`;
+          const message = `Your Greet login code is: ${code}\n\nThis code expires in 10 minutes.`;
           const result = await smsService.sendSMS({ to: user.phoneNumber, message });
           sent = result.success;
           error = result.error;
@@ -1001,7 +1001,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Set Your Password - Checkmate</title>
+  <title>Set Your Password - Greet</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -1412,7 +1412,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (smsService.isConfigured()) {
           const baseUrl = `${req.protocol}://${req.get('host')}`;
           const name = user.firstName || 'there';
-          const message = `Hi ${name}! Your Checkmate account is ready. Log in at ${baseUrl}/login using this phone number to receive a one-time code.`;
+          const message = `Hi ${name}! Your Greet account is ready. Log in at ${baseUrl}/login using this phone number to receive a one-time code.`;
           
           logger.info(`Sending welcome SMS to ${user.phoneNumber}`);
           const result = await smsService.sendSMS({ to: user.phoneNumber, message });
@@ -1712,13 +1712,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create customer
   app.post("/api/customers", requireAuth, async (req, res) => {
     try {
-      // Only super admins can create customers
       if (!isSuperAdmin(req.dbUser)) {
         return res.status(403).json({ error: "Only super admins can create customers" });
       }
       
-      const customerData = insertCustomerSchema.parse(req.body);
+      const body = { ...req.body };
+      if (body.licenseStartDate && typeof body.licenseStartDate === "string") {
+        body.licenseStartDate = new Date(body.licenseStartDate);
+      }
+      if (body.licenseEndDate && typeof body.licenseEndDate === "string") {
+        body.licenseEndDate = new Date(body.licenseEndDate);
+      }
+      const customerData = insertCustomerSchema.parse(body);
       const customer = await storage.createCustomer(customerData);
+      
+      try {
+        const { provisionFeatureFlags } = await import("./services/license-provisioning");
+        const licenseType = (customerData.licenseType as "basic" | "premium") || "basic";
+        await provisionFeatureFlags(customer.id, licenseType);
+      } catch (provisionError) {
+        logger.error({ err: provisionError, customerId: customer.id }, "Feature provisioning failed, cleaning up");
+        await storage.deleteCustomer(customer.id);
+        throw new Error("Failed to provision features for new account");
+      }
+      
       res.status(201).json(customer);
     } catch (error: any) {
       logger.error({ err: error }, "Error creating customer");
@@ -1755,6 +1772,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error({ err: error }, "Error updating customer");
       res.status(500).json({ error: "Failed to update customer" });
+    }
+  });
+
+  // Update kiosk branding for a customer (admin can update their own account)
+  app.patch("/api/customers/:id/branding", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.dbUser;
+
+      // Admins can update their own account, super_admins can update any
+      if (!isSuperAdmin(user) && user?.customerId !== id) {
+        return res.status(403).json({ error: "You can only update branding for your own account" });
+      }
+      if (!isSuperAdmin(user) && user?.role !== "admin") {
+        return res.status(403).json({ error: "Only admins can update branding" });
+      }
+
+      const existingCustomer = await storage.getCustomer(id);
+      if (!existingCustomer) {
+        return res.status(404).json({ error: "Customer not found" });
+      }
+
+      const { kioskBranding } = req.body;
+      const updatedCustomer = await storage.updateCustomer(id, { kioskBranding });
+      res.json(updatedCustomer);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating customer branding");
+      res.status(500).json({ error: "Failed to update branding" });
     }
   });
 
@@ -2078,6 +2123,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Customer not found" });
       }
       const hasPin = !!(event.tempStaffSettings as any)?.kioskPin;
+      // Resolve branding: event override if enabled, otherwise account default
+      const eventBranding = (event.kioskBrandingOverride as any)?.enabled ? event.kioskBrandingOverride : null;
+      const branding = eventBranding || customer.kioskBranding || null;
       res.json({
         event: {
           id: event.id,
@@ -2092,6 +2140,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: customer.name,
         },
         hasPin,
+        branding,
       });
     } catch (error: any) {
       res.status(500).json({ error: "Failed to load kiosk launch info" });
@@ -3951,7 +4000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             endpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}/{{externalId}}",
             walkinEndpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}",
             walkinStatus: "Attended",
-            walkinSource: "Checkmate",
+            walkinSource: "Greet",
             checkinStatus: "Attended",
             revertStatus: "Registered",
             maxRetries: 3,
@@ -10347,6 +10396,186 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===== License & Usage Management =====
+
+  app.get("/api/customers/:customerId/license", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      const { getAccountFeatureConfigs } = await import("./services/license-provisioning");
+      const featureConfigs = await getAccountFeatureConfigs(customerId);
+
+      res.json({
+        licenseType: customer.licenseType,
+        licensePlan: customer.licensePlan,
+        prepaidAttendees: customer.prepaidAttendees,
+        licenseStartDate: customer.licenseStartDate,
+        licenseEndDate: customer.licenseEndDate,
+        licenseNotes: customer.licenseNotes,
+        featureConfigs,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching license info");
+      res.status(500).json({ error: "Failed to fetch license info" });
+    }
+  });
+
+  const licenseUpdateSchema = z.object({
+    licenseType: z.enum(["basic", "premium"]).optional(),
+    licensePlan: z.enum(["starter", "professional", "enterprise", "strategic"]).nullable().optional(),
+    prepaidAttendees: z.number().int().positive().nullable().optional(),
+    licenseStartDate: z.string().nullable().optional(),
+    licenseEndDate: z.string().nullable().optional(),
+    licenseNotes: z.string().max(1000).nullable().optional(),
+  });
+
+  app.patch("/api/customers/:customerId/license", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { customerId } = req.params;
+      const parsed = licenseUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten().fieldErrors });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      const { licenseType, licensePlan, prepaidAttendees, licenseStartDate, licenseEndDate, licenseNotes } = parsed.data;
+      const updateData: Record<string, any> = {};
+      if (licenseType !== undefined) updateData.licenseType = licenseType;
+      if (licensePlan !== undefined) updateData.licensePlan = licensePlan;
+      if (prepaidAttendees !== undefined) updateData.prepaidAttendees = prepaidAttendees;
+      if (licenseStartDate !== undefined) updateData.licenseStartDate = licenseStartDate ? new Date(licenseStartDate) : null;
+      if (licenseEndDate !== undefined) updateData.licenseEndDate = licenseEndDate ? new Date(licenseEndDate) : null;
+      if (licenseNotes !== undefined) updateData.licenseNotes = licenseNotes;
+
+      const updated = await storage.updateCustomer(customerId, updateData);
+
+      if (licenseType && licenseType !== customer.licenseType) {
+        const { updateLicenseFeatures } = await import("./services/license-provisioning");
+        await updateLicenseFeatures(customerId, licenseType);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating license");
+      res.status(500).json({ error: "Failed to update license" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/features", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { getAccountFeatureConfigs, getFeatureDefinitions } = await import("./services/license-provisioning");
+      const configs = await getAccountFeatureConfigs(customerId);
+      const definitions = getFeatureDefinitions();
+
+      const features = definitions.map(def => {
+        const config = configs.find(c => c.featureKey === def.key);
+        return {
+          key: def.key,
+          name: def.name,
+          category: def.category,
+          enabled: config?.enabled ?? false,
+          metadata: config?.metadata || def.metadata || null,
+        };
+      });
+
+      res.json(features);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching account features");
+      res.status(500).json({ error: "Failed to fetch features" });
+    }
+  });
+
+  app.patch("/api/customers/:customerId/features/:featureKey", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { customerId, featureKey } = req.params;
+      const { enabled } = req.body;
+
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "enabled must be a boolean" });
+      }
+
+      const { toggleAccountFeature } = await import("./services/license-provisioning");
+      const success = await toggleAccountFeature(customerId, featureKey, enabled);
+
+      if (!success) {
+        return res.status(404).json({ error: "Feature config not found" });
+      }
+
+      res.json({ featureKey, enabled });
+    } catch (error) {
+      logger.error({ err: error }, "Error toggling feature");
+      res.status(500).json({ error: "Failed to toggle feature" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/usage", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { getUsageSummary } = await import("./services/usage-tracking");
+      const summary = await getUsageSummary(customerId);
+      if (!summary) return res.status(404).json({ error: "Customer not found" });
+      res.json(summary);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching usage");
+      res.status(500).json({ error: "Failed to fetch usage" });
+    }
+  });
+
+  app.get("/api/mission-control/usage-overview", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { getAllPremiumUsageSummaries } = await import("./services/usage-tracking");
+      const summaries = await getAllPremiumUsageSummaries();
+      res.json(summaries);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching usage overview");
+      res.status(500).json({ error: "Failed to fetch usage overview" });
+    }
+  });
+
+  app.post("/api/mission-control/usage-snapshot", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { runDailyUsageCheck } = await import("./services/usage-tracking");
+      await runDailyUsageCheck();
+      res.json({ success: true, message: "Usage snapshots taken and alerts checked" });
+    } catch (error) {
+      logger.error({ err: error }, "Error running usage snapshot");
+      res.status(500).json({ error: "Failed to run usage snapshot" });
+    }
+  });
+
   // ===== Mission Control: Feature Flags CRUD (super admin only) =====
 
   app.get("/api/mission-control/flags", requireAuth, async (req, res) => {
@@ -10506,7 +10735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const result = await smsService.sendSMS({ 
         to: phoneNumber, 
-        message: "Checkmate Twilio test successful! Your SMS configuration is working." 
+        message: "Greet Twilio test successful! Your SMS configuration is working." 
       });
       
       if (result.success) {
@@ -10886,13 +11115,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { feedbackEntries, customers } = await import("@shared/schema");
       const { desc, eq, and, gte, sql } = await import("drizzle-orm");
 
-      const { type, status, page: pageNum = "1", limit: limitStr = "50", since } = req.query;
+      const { type, status, page: pageNum = "1", limit: limitStr = "50", since, customerId: filterCustomerId } = req.query;
       const limit = Math.min(parseInt(limitStr as string) || 50, 200);
       const offset = (Math.max(parseInt(pageNum as string) || 1, 1) - 1) * limit;
 
       let conditions: any[] = [];
       if (!isSuperAdmin && req.dbUser?.customerId) {
         conditions.push(eq(feedbackEntries.customerId, req.dbUser.customerId));
+      } else if (isSuperAdmin && filterCustomerId) {
+        conditions.push(eq(feedbackEntries.customerId, filterCustomerId as string));
       }
       if (type) conditions.push(eq(feedbackEntries.type, type as any));
       if (status) conditions.push(eq(feedbackEntries.status, status as any));
@@ -11032,21 +11263,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/alpha-feedback-tracker", requireAuth, async (req: any, res) => {
-    try {
-      if (req.dbUser?.role !== "super_admin") {
-        return res.status(403).json({ error: "Super admin access required" });
-      }
-      const fs = await import("fs");
-      const path = await import("path");
-      const filePath = path.join(process.cwd(), "docs", "Alpha-Feedback-Tracker.md");
-      const content = fs.readFileSync(filePath, "utf-8");
-      res.json({ content });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error reading alpha feedback tracker");
-      res.status(500).json({ error: "Failed to load alpha feedback tracker" });
-    }
-  });
 
   app.get("/api/admin/feedback/stats", requireAuth, async (req: any, res) => {
     try {
@@ -11059,9 +11275,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { feedbackEntries } = await import("@shared/schema");
       const { sql, eq } = await import("drizzle-orm");
 
-      const tenantFilter = !isSuperAdmin && req.dbUser?.customerId
-        ? eq(feedbackEntries.customerId, req.dbUser.customerId)
-        : undefined;
+      const { customerId: filterCustomerId } = req.query;
+      let tenantFilter;
+      if (!isSuperAdmin && req.dbUser?.customerId) {
+        tenantFilter = eq(feedbackEntries.customerId, req.dbUser.customerId);
+      } else if (isSuperAdmin && filterCustomerId) {
+        tenantFilter = eq(feedbackEntries.customerId, filterCustomerId as string);
+      }
 
       const [stats] = await db.select({
         total: sql<number>`count(*)::int`,

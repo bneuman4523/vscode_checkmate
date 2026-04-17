@@ -77,12 +77,12 @@ class SMSService {
     const setupUrl = baseUrl ? `${baseUrl}/api/password-setup?code=${code}` : null;
 
     const message = setupUrl
-      ? `Hi ${name}! Your Checkmate access code is: ${code}
+      ? `Hi ${name}! Your Greet access code is: ${code}
 
 Set up your password here: ${setupUrl}
 
 This code expires in 48 hours.`
-      : `Hi ${name}! Your Checkmate access code is: ${code}
+      : `Hi ${name}! Your Greet access code is: ${code}
 
 Enter this code to set up your password. This code expires in 48 hours.`;
 
@@ -99,7 +99,7 @@ Enter this code to set up your password. This code expires in 48 hours.`;
   ): Promise<{ success: boolean; error?: string }> {
     const name = firstName || 'there';
 
-    const message = `Hi ${name}! Your Checkmate password reset code is: ${code}
+    const message = `Hi ${name}! Your Greet password reset code is: ${code}
 
 This code expires in 15 minutes. If you didn't request this, please ignore.`;
 

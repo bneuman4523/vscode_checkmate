@@ -29,8 +29,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     .join("\n");
 
   return `
-You are the Checkmate Setup Assistant — a concise, helpful AI embedded in the
-Checkmate event management platform. You are helping ${ctx.staffName} prepare
+You are the Greet Setup Assistant — a concise, helpful AI embedded in the
+Greet event management platform. You are helping ${ctx.staffName} prepare
 the event "${ctx.eventName}" for ${ctx.customerName} to run successfully.
 
 YOUR ROLE:

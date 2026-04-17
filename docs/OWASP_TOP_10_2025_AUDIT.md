@@ -1,6 +1,6 @@
 # OWASP Top 10:2025 Internal Security Audit
 
-**Application:** CheckinKit (Checkmate)  
+**Application:** CheckinKit (Greet)  
 **Audit Date:** March 2, 2026  
 **Auditor:** Internal Automated Review  
 **Scope:** Full codebase — server routes, authentication, data access, client-side security
