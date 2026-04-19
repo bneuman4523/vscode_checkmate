@@ -28,9 +28,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { 
-  Settings, 
-  Palette, 
+import {
+  Settings,
+  Palette,
   Bell,
   Trash2,
   Link2,
@@ -54,7 +54,8 @@ import {
   Upload,
   Sun,
   Moon,
-  ImageIcon
+  ImageIcon,
+  Lock
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -62,6 +63,7 @@ import type { Event, CustomerIntegration, EventIntegration, Location, KioskBrand
 import { WorkflowConfigurator } from "./workflow/WorkflowConfigurator";
 import EventNotifications from "./EventNotifications";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useAuth } from "@/hooks/useAuth";
 import { Checkbox } from "@/components/ui/checkbox";
 
 interface EventSettingsProps {
@@ -81,6 +83,12 @@ const PROVIDER_VARIABLE_FIELDS: Record<string, Array<{ key: string; label: strin
     { key: "eventId", label: "Event ID", placeholder: "External event identifier" },
   ],
 };
+
+interface DiscoveredStatusesResponse {
+  statuses: Array<{ label: string; count: number }>;
+  selectedStatuses: string[] | null;
+  statusesConfigured: boolean;
+}
 
 interface KioskWalkinConfig {
   enabledFields: string[];
@@ -120,7 +128,9 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [editingVariables, setEditingVariables] = useState<Record<string, Record<string, string>>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const featureFlags = useFeatureFlags();
-  
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
   const [staffEnabled, setStaffEnabled] = useState(false);
   const [staffPasscode, setStaffPasscode] = useState("");
   const [staffStartTime, setStaffStartTime] = useState("");
@@ -148,6 +158,10 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [brandingInitialized, setBrandingInitialized] = useState(false);
   const brandingLogoInputRef = useRef<HTMLInputElement>(null);
   const brandingBannerInputRef = useRef<HTMLInputElement>(null);
+
+  // Attendee statuses state
+  const [localSelectedStatuses, setLocalSelectedStatuses] = useState<string[]>([]);
+  const [statusesInitialized, setStatusesInitialized] = useState(false);
 
   const { data: event, isLoading: eventLoading } = useQuery<Event>({
     queryKey: ["/api/events", eventId],
@@ -178,6 +192,43 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       return res.json();
     },
     enabled: !!event?.customerId,
+  });
+
+  const { data: discoveredStatusesData, isLoading: statusesLoading } = useQuery<DiscoveredStatusesResponse>({
+    queryKey: ["/api/events", eventId, "discovered-statuses"],
+    enabled: !!eventId,
+  });
+
+  // Initialize local statuses state from server data
+  useEffect(() => {
+    if (discoveredStatusesData && !statusesInitialized) {
+      setLocalSelectedStatuses(discoveredStatusesData.selectedStatuses || []);
+      setStatusesInitialized(true);
+    }
+  }, [discoveredStatusesData, statusesInitialized]);
+
+  const saveSelectedStatusesMutation = useMutation({
+    mutationFn: async (selectedStatuses: string[]) => {
+      const response = await apiRequest("PATCH", `/api/events/${eventId}/selected-statuses`, {
+        selectedStatuses,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "discovered-statuses"] });
+      setStatusesInitialized(false); // Allow re-init from fresh data
+      toast({
+        title: "Statuses updated",
+        description: "Attendee status selection has been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update statuses",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   const updateEventLocationMutation = useMutation({
@@ -618,8 +669,11 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     belowLine?: boolean;
   };
 
+  const statusesConfiguredStatus = discoveredStatusesData?.statusesConfigured ? "configured" as const : "needs-setup" as const;
+
   const navItems: SettingsNavItem[] = [
     { id: "access", label: "Access", icon: Shield, status: accessStatus },
+    { id: "statuses", label: "Attendee Statuses", icon: Users, status: statusesConfiguredStatus },
     { id: "workflow", label: "Check-in Workflow", icon: ListChecks, status: "configured" },
     { id: "notifications", label: "Notifications", icon: Bell, status: "configured" },
     { id: "branding", label: "Kiosk Branding", icon: Palette, status: brandingOverrideEnabled ? "configured" : "needs-setup" },
@@ -1098,6 +1152,134 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
           )}
         </CardContent>
       </Card>
+        </div>}
+
+        {activeSection === "statuses" && <div>
+          <Card data-testid="card-attendee-statuses">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                Attendee Statuses
+              </CardTitle>
+              <CardDescription>
+                Select which attendee statuses to include for this event
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {statusesLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              ) : !discoveredStatusesData || discoveredStatusesData.statuses.length === 0 ? (
+                <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 p-4">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    Sync attendees first to discover available statuses
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Select All / Deselect All */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const allLabels = discoveredStatusesData.statuses.map(s => s.label);
+                        setLocalSelectedStatuses(allLabels);
+                      }}
+                      data-testid="button-select-all-statuses"
+                    >
+                      Select All
+                    </Button>
+                    {isSuperAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setLocalSelectedStatuses([])}
+                        data-testid="button-deselect-all-statuses"
+                      >
+                        Deselect All
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Status checkboxes */}
+                  <div className="space-y-2">
+                    {discoveredStatusesData.statuses.map((status) => {
+                      const isSelected = localSelectedStatuses.includes(status.label);
+                      const wasPreviouslySaved = (discoveredStatusesData.selectedStatuses || []).includes(status.label);
+                      const isLocked = !isSuperAdmin && wasPreviouslySaved;
+
+                      return (
+                        <div
+                          key={status.label}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border p-3 transition-colors",
+                            isSelected ? "bg-primary/5 border-primary/20" : "bg-background",
+                            isLocked && "opacity-80"
+                          )}
+                        >
+                          <Checkbox
+                            id={`status-${status.label}`}
+                            checked={isSelected}
+                            disabled={isLocked}
+                            onCheckedChange={(checked) => {
+                              if (isLocked) return;
+                              if (checked) {
+                                setLocalSelectedStatuses(prev => [...prev, status.label]);
+                              } else {
+                                setLocalSelectedStatuses(prev => prev.filter(s => s !== status.label));
+                              }
+                            }}
+                            data-testid={`checkbox-status-${status.label}`}
+                          />
+                          <label
+                            htmlFor={`status-${status.label}`}
+                            className={cn(
+                              "flex-1 text-sm font-medium cursor-pointer",
+                              isLocked && "cursor-default"
+                            )}
+                          >
+                            {status.label}
+                          </label>
+                          <Badge variant="secondary" className="text-xs tabular-nums">
+                            {status.count.toLocaleString()}
+                          </Badge>
+                          {isLocked && (
+                            <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Summary line */}
+                  <p className="text-sm text-muted-foreground">
+                    {localSelectedStatuses.length} of {discoveredStatusesData.statuses.length} statuses selected
+                    {" "}
+                    ({discoveredStatusesData.statuses
+                      .filter(s => localSelectedStatuses.includes(s.label))
+                      .reduce((sum, s) => sum + s.count, 0)
+                      .toLocaleString()} attendees included)
+                  </p>
+
+                  {/* Save button */}
+                  <div className="flex justify-end pt-2 border-t">
+                    <Button
+                      onClick={() => saveSelectedStatusesMutation.mutate(localSelectedStatuses)}
+                      disabled={saveSelectedStatusesMutation.isPending || localSelectedStatuses.length === 0}
+                      data-testid="button-save-statuses"
+                    >
+                      {saveSelectedStatusesMutation.isPending ? "Saving..." : "Save Statuses"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>}
 
         {activeSection === "workflow" && <div>

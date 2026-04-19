@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useParams } from "wouter";
 import { Loader2, Users, Clock, Printer, Cloud } from "lucide-react";
 import KioskMode from "@/components/KioskMode";
@@ -18,11 +18,11 @@ import { DashboardHeader } from "./components/DashboardHeader";
 import { DashboardStats } from "./components/DashboardStats";
 import { AttendeeTab } from "./components/AttendeeTab";
 import { SessionTab } from "./components/SessionTab";
-import { 
-  CheckinDialog, 
-  EditAttendeeDialog, 
-  PrintPreviewDialog, 
-  WorkflowDialog, 
+import {
+  CheckinDialog,
+  EditAttendeeDialog,
+  PrintPreviewDialog,
+  WorkflowDialog,
   BadgePreviewDialog,
   AddAttendeeDialog,
 } from "./components/dialogs";
@@ -33,7 +33,6 @@ import PrinterOfflineAlert from "@/components/PrinterOfflineAlert";
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import { printOrchestrator } from "@/services/print-orchestrator";
 import type { Attendee, Session, EditFormData, PrintPreviewData } from "./types";
-import type { RegistrationStatus } from "@shared/schema";
 import { registrationStatuses } from "@shared/schema";
 
 /**
@@ -63,7 +62,7 @@ export default function StaffDashboard() {
   const [editFormData, setEditFormData] = useState<EditFormData>({ firstName: "", lastName: "", company: "", title: "" });
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<RegistrationStatus[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const statusFilterInitialized = useRef(false);
   const [sessionSearchTerm, setSessionSearchTerm] = useState("");
   const [attendeeScanMode, setAttendeeScanMode] = useState(false);
@@ -96,6 +95,27 @@ export default function StaffDashboard() {
   useBackNavigationGuard(isAuthenticated);
 
   const queries = useStaffQueries(eventId, isAuthenticated, selectedSession?.id);
+
+  // Pre-filter attendees by the event's selected statuses (from sync config)
+  const selectedStatuses = queries.event?.syncSettings?.selectedStatuses;
+
+  const includedAttendees = useMemo(() => {
+    if (!selectedStatuses || selectedStatuses.length === 0) {
+      return queries.attendees;
+    }
+    return queries.attendees.filter(a => {
+      const status = a.registrationStatusLabel || a.registrationStatus || '';
+      return selectedStatuses.includes(status);
+    });
+  }, [queries.attendees, selectedStatuses]);
+
+  // Determine which statuses to show as filter buttons
+  const availableStatuses = useMemo(() => {
+    if (selectedStatuses && selectedStatuses.length > 0) {
+      return selectedStatuses;
+    }
+    return [...registrationStatuses];
+  }, [selectedStatuses]);
 
   const handlePrintPreview = useCallback((data: PrintPreviewData) => {
     setPrintPreviewData(data);
@@ -130,7 +150,7 @@ export default function StaffDashboard() {
   }, [queries.event]);
 
   const { filteredAttendees, checkedInCount, badgePrintedCount } = useAttendeeFilters(
-    queries.attendees,
+    includedAttendees,
     searchTerm,
     statusFilter
   );
@@ -355,7 +375,7 @@ export default function StaffDashboard() {
 
       <main className="p-4 max-w-4xl mx-auto">
         <DashboardStats
-          totalAttendees={queries.attendees.length}
+          totalAttendees={includedAttendees.length}
           checkedInCount={checkedInCount}
           badgePrintedCount={badgePrintedCount}
           sessionsCount={queries.sessions.length}
@@ -375,12 +395,13 @@ export default function StaffDashboard() {
 
           <TabsContent value="event-checkin" className="space-y-4">
             <AttendeeTab
-              attendees={queries.attendees}
+              attendees={includedAttendees}
               filteredAttendees={filteredAttendees}
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
               statusFilter={statusFilter}
               onStatusFilterChange={setStatusFilter}
+              availableStatuses={availableStatuses}
               scanMode={attendeeScanMode}
               onToggleScanMode={() => setAttendeeScanMode(!attendeeScanMode)}
               isLoading={queries.attendeesLoading}

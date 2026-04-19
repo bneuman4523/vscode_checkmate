@@ -1,10 +1,9 @@
 import { useMemo } from "react";
 import type { Attendee, SessionRegistration } from "../types";
-import type { RegistrationStatus } from "@shared/schema";
 
 /**
  * Provides filtered and sorted attendee lists for the dashboard.
- * 
+ *
  * Why: Search and sort logic is pure transformation that benefits from
  * memoization. Extracting into a hook allows reuse and keeps render
  * functions focused on presentation.
@@ -12,13 +11,16 @@ import type { RegistrationStatus } from "@shared/schema";
 export function useAttendeeFilters(
   attendees: Attendee[],
   searchTerm: string,
-  statusFilter: RegistrationStatus[] = []
+  statusFilter: string[] = []
 ) {
   const filteredAttendees = useMemo(() => {
     return attendees
       .filter(a => {
-        if (statusFilter.length > 0 && !statusFilter.includes(a.registrationStatus as RegistrationStatus)) {
-          return false;
+        if (statusFilter.length > 0) {
+          const attendeeStatus = a.registrationStatusLabel || a.registrationStatus || '';
+          if (!statusFilter.includes(attendeeStatus)) {
+            return false;
+          }
         }
         if (!searchTerm) return true;
         const term = searchTerm.toLowerCase();

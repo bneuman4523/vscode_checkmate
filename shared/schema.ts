@@ -396,6 +396,8 @@ export const events = pgTable("events", {
     syncFrozen?: boolean;
     syncFrozenAt?: string;
     syncIntervalMinutes?: number | null;
+    selectedStatuses?: string[];
+    statusesConfigured?: boolean;
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),
@@ -1680,6 +1682,8 @@ export const eventConfigurationTemplates = pgTable("event_configuration_template
   staffSettings: jsonb("staff_settings").$type<StaffSettingsSnapshot>(),
   // Workflow configuration snapshot
   workflowSnapshot: jsonb("workflow_snapshot").$type<WorkflowSnapshot>(),
+  // Default attendee status selections for new events
+  selectedStatuses: jsonb("selected_statuses").$type<string[]>(),
   // Whether to auto-apply this template to newly synced events
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),

@@ -78,6 +78,22 @@ export async function checkEventSetup(
     fixRoute: `${basePath}/attendees`,
   });
 
+  const hasIntegration = (integrations ?? []).some((i) => i.status === "connected");
+  if (hasIntegration || attendeeCount > 0) {
+    const statusesConfigured = !!(event?.syncSettings as any)?.statusesConfigured;
+    items.push({
+      id: "attendee_statuses",
+      label: "Attendee statuses selected",
+      description: statusesConfigured
+        ? "Status filter configured"
+        : "Choose which attendee statuses to include for this event",
+      complete: statusesConfigured,
+      severity: "required",
+      fixAction: "set_attendee_statuses",
+      fixRoute: `${basePath}/settings`,
+    });
+  }
+
   if (hasWorkflowConfigured) {
     items.push({
       id: "checkin_workflow",

@@ -3225,6 +3225,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultRegistrationStatusFilter: event.tempStaffSettings.defaultRegistrationStatusFilter,
       } : null;
       
+      // Capture selected statuses from the source event
+      const eventSelectedStatuses = (event.syncSettings as any)?.selectedStatuses || null;
+
       const template = await storage.createEventConfigurationTemplate({
         customerId: event.customerId,
         name,
@@ -3234,6 +3237,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultPrinterId: event.selectedPrinterId,
         staffSettings,
         workflowSnapshot,
+        selectedStatuses: eventSelectedStatuses,
         isDefault: false,
       });
       
@@ -3303,6 +3307,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           defaultBadgeTemplateId: sourceEvent.defaultBadgeTemplateId,
           badgeTemplateOverrides: Object.keys(badgeTemplateOverrides).length > 0 ? badgeTemplateOverrides : null,
           defaultPrinterId: sourceEvent.selectedPrinterId,
+          selectedStatuses: (sourceEvent.syncSettings as any)?.selectedStatuses || null,
           staffSettings: sourceEvent.tempStaffSettings?.enabled ? {
             enabled: true,
             startPreset: '1_week_before',
@@ -3352,8 +3357,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultEndTime.setDate(defaultEndTime.getDate() + 1);
         defaultEndTime.setHours(23, 59, 59, 999);
         
+        const manualStatusesOk = !!(event.syncSettings as any)?.statusesConfigured;
         await storage.updateEvent(eventId, {
-          configStatus: 'configured',
+          configStatus: manualStatusesOk ? 'configured' : 'unconfigured',
           tempStaffSettings: {
             enabled: true,
             passcodeHash: hashedPasscode,
@@ -3553,10 +3559,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Update event config status to configured
-      await storage.updateEvent(eventId, { 
-        configStatus: 'configured',
-        configuredAt: new Date(),
+      // Apply selected statuses from template/source if available
+      if (config.selectedStatuses && config.selectedStatuses.length > 0) {
+        const currentSyncSettings = (event.syncSettings as any) || {};
+        await storage.updateEvent(eventId, {
+          syncSettings: {
+            ...currentSyncSettings,
+            selectedStatuses: config.selectedStatuses,
+            statusesConfigured: true,
+          },
+        });
+      }
+
+      // Update event config status — only mark configured if statuses are set
+      const refreshedEvent = await storage.getEvent(eventId);
+      const statusesOk = !!(refreshedEvent?.syncSettings as any)?.statusesConfigured;
+      await storage.updateEvent(eventId, {
+        configStatus: statusesOk ? 'configured' : 'unconfigured',
+        configuredAt: statusesOk ? new Date() : null,
         configTemplateId: templateId || null,
       });
       
@@ -7956,6 +7976,108 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get discovered attendee statuses for an event
+  app.get("/api/events/:eventId/discovered-statuses", requireAuth, async (req, res) => {
+    try {
+      const { eventId } = req.params;
+      const event = await storage.getEvent(eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const attendees = await storage.getAttendees(eventId);
+      const statusCounts = new Map<string, number>();
+      for (const a of attendees) {
+        const label = (a as any).registrationStatusLabel || a.registrationStatus || 'Unknown';
+        statusCounts.set(label, (statusCounts.get(label) || 0) + 1);
+      }
+
+      const statuses = Array.from(statusCounts.entries())
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count);
+
+      const syncSettings = (event.syncSettings as any) || {};
+      res.json({
+        statuses,
+        selectedStatuses: syncSettings.selectedStatuses || null,
+        statusesConfigured: !!syncSettings.statusesConfigured,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Error fetching discovered statuses");
+      res.status(500).json({ error: "Failed to fetch discovered statuses" });
+    }
+  });
+
+  // Update selected attendee statuses for an event (add-only for non-super_admin)
+  app.patch("/api/events/:eventId/selected-statuses", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { eventId } = req.params;
+      const event = await storage.getEvent(eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const { selectedStatuses } = req.body;
+      if (!Array.isArray(selectedStatuses) || selectedStatuses.length === 0) {
+        return res.status(400).json({ error: "selectedStatuses must be a non-empty array of strings" });
+      }
+
+      const existing = (event.syncSettings as any) || {};
+      const previouslySelected: string[] = existing.selectedStatuses || [];
+
+      // Add-only enforcement: non-super_admin cannot remove previously selected statuses
+      if (!isSuperAdmin(req.dbUser) && previouslySelected.length > 0) {
+        const removed = previouslySelected.filter((s: string) => !selectedStatuses.includes(s));
+        if (removed.length > 0) {
+          return res.status(403).json({
+            error: "Only super admins can remove previously selected statuses",
+            removedStatuses: removed,
+          });
+        }
+      }
+
+      const updated = {
+        ...existing,
+        selectedStatuses,
+        statusesConfigured: true,
+      };
+
+      const updatedEvent = await storage.updateEvent(eventId, { syncSettings: updated });
+
+      await storage.createAuditLog({
+        action: "event_status_selection_update",
+        userId: req.dbUser?.id || "unknown",
+        userEmail: req.dbUser?.email || "unknown",
+        userRole: req.dbUser?.role || "unknown",
+        customerId: event.customerId,
+        customerName: null,
+        resourceType: "event",
+        resourceId: eventId,
+        resourceName: event.name,
+        changedFields: [{
+          field: "selectedStatuses",
+          oldValue: previouslySelected.length > 0 ? previouslySelected.join(", ") : "none",
+          newValue: selectedStatuses.join(", "),
+        }],
+        metadata: null,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || null,
+        userAgent: req.headers["user-agent"] || null,
+      });
+
+      res.json({
+        selectedStatuses: updated.selectedStatuses,
+        statusesConfigured: true,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Error updating selected statuses");
+      res.status(500).json({ error: "Failed to update selected statuses" });
+    }
+  });
+
   // Configure temp staff settings for an event (admin only)
   app.patch("/api/events/:eventId/staff-settings", requireAuth, async (req, res) => {
     try {
@@ -8021,7 +8143,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tempStaffSettings: staffSettings as any,
       };
       if (staffSettings?.enabled) {
-        updateData.configStatus = 'configured';
+        const staffEvent = await storage.getEvent(req.params.eventId);
+        const staffStatusesOk = !!(staffEvent?.syncSettings as any)?.statusesConfigured;
+        if (staffStatusesOk) {
+          updateData.configStatus = 'configured';
+        }
       }
 
       const updatedEvent = await storage.updateEvent(req.params.eventId, updateData);
@@ -8246,6 +8372,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           customerId: event.customerId,
           customerName: customer?.name,
           eventDate: event.eventDate,
+          syncSettings: event.syncSettings || null,
+          tempStaffSettings: event.tempStaffSettings || null,
         },
         settings: {
           printPreviewOnCheckin: event.tempStaffSettings?.printPreviewOnCheckin || false,

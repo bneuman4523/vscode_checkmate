@@ -69,7 +69,7 @@ import PrinterSelector from "./PrinterSelector";
 import PrinterOfflineAlert from "./PrinterOfflineAlert";
 import { getPrinterDisplayName } from "@/lib/printerPreferences";
 import type { SelectedPrinter } from "@/lib/printerPreferences";
-import type { Attendee, EventWorkflowStep, EventBuyerQuestion, EventDisclaimer, BadgeTemplate, RegistrationStatus } from "@shared/schema";
+import type { Attendee, EventWorkflowStep, EventBuyerQuestion, EventDisclaimer, BadgeTemplate } from "@shared/schema";
 import { registrationStatuses } from "@shared/schema";
 
 import {
@@ -113,7 +113,7 @@ interface EventAttendeesProps {
 
 export default function EventAttendees({ eventId }: EventAttendeesProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<RegistrationStatus[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -133,7 +133,10 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
   const fontContext = useFontsOptional();
 
 
-  const { data: eventData } = useQuery<{ customerId?: string }>({
+  const { data: eventData } = useQuery<{
+    customerId?: string;
+    syncSettings?: { selectedStatuses?: string[]; statusesConfigured?: boolean } | null;
+  }>({
     queryKey: ["/api/events", eventId],
     enabled: !!eventId,
   });
@@ -167,6 +170,27 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     PARTICIPANT_TYPES.forEach(t => typesFromEvent.add(t));
     return Array.from(typesFromEvent).sort();
   }, [attendees]);
+
+  // Pre-filter attendees by the event's selected statuses (from sync config)
+  const selectedStatuses = eventData?.syncSettings?.selectedStatuses;
+
+  const includedAttendees = useMemo(() => {
+    if (!selectedStatuses || selectedStatuses.length === 0) {
+      return attendees;
+    }
+    return attendees.filter(a => {
+      const status = a.registrationStatusLabel || a.registrationStatus;
+      return selectedStatuses.includes(status);
+    });
+  }, [attendees, selectedStatuses]);
+
+  // Determine which statuses to show as filter buttons
+  const availableStatuses = useMemo(() => {
+    if (selectedStatuses && selectedStatuses.length > 0) {
+      return selectedStatuses;
+    }
+    return [...registrationStatuses];
+  }, [selectedStatuses]);
 
   const { data: workflowConfig } = useQuery<WorkflowConfig | null>({
     queryKey: [`/api/events/${eventId}/workflow`],
@@ -566,7 +590,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     setIsDeleteDialogOpen(true);
   };
 
-  const toggleStatusFilter = (status: RegistrationStatus) => {
+  const toggleStatusFilter = (status: string) => {
     setStatusFilter(prev =>
       prev.includes(status)
         ? prev.filter(s => s !== status)
@@ -574,10 +598,13 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     );
   };
 
-  const filteredAttendees = attendees
+  const filteredAttendees = includedAttendees
     .filter((attendee) => {
-      if (statusFilter.length > 0 && !statusFilter.includes(attendee.registrationStatus as RegistrationStatus)) {
-        return false;
+      if (statusFilter.length > 0) {
+        const attendeeStatus = attendee.registrationStatusLabel || attendee.registrationStatus;
+        if (!statusFilter.includes(attendeeStatus)) {
+          return false;
+        }
       }
       const searchLower = searchQuery.toLowerCase();
       return (
@@ -669,8 +696,8 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
 
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-sm text-muted-foreground">Status:</span>
-        {registrationStatuses.map((status) => {
-          const count = attendees.filter(a => a.registrationStatus === status).length;
+        {availableStatuses.map((status) => {
+          const count = includedAttendees.filter(a => (a.registrationStatusLabel || a.registrationStatus) === status).length;
           const isActive = statusFilter.includes(status);
           return (
             <Button
