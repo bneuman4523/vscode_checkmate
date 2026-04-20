@@ -149,7 +149,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
   const networkPrint = useNetworkPrint();
   const fontContext = useFontsOptional();
 
-  const groupCheckin = useGroupCheckin({ eventId, mode: 'staff' });
+  const groupCheckin = useGroupCheckin({ eventId, mode: 'admin' });
 
   const { data: eventData } = useQuery<{
     customerId?: string;

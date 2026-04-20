@@ -3,7 +3,7 @@ import { apiRequest } from "@/lib/queryClient";
 
 interface UseGroupCheckinOptions {
   eventId: string;
-  mode: 'kiosk' | 'staff';
+  mode: 'kiosk' | 'staff' | 'admin';
   pin?: string; // required for kiosk mode
   getStaffAuthHeaders?: () => Record<string, string>; // for staff mode auth
 }
@@ -86,6 +86,9 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
           const errorData = await res.json().catch(() => ({}));
           throw new Error(errorData.error || `Lookup failed (${res.status})`);
         }
+        data = await res.json();
+      } else if (mode === 'admin') {
+        const res = await apiRequest('GET', `/api/events/${eventId}/group/${encodeURIComponent(orderCode)}`);
         data = await res.json();
       } else {
         const headers = getStaffAuthHeaders ? getStaffAuthHeaders() : {};
@@ -179,6 +182,13 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
           const errorData = await res.json().catch(() => ({}));
           throw new Error(errorData.error || `Check-in failed (${res.status})`);
         }
+        data = await res.json();
+      } else if (mode === 'admin') {
+        const res = await apiRequest('POST', `/api/events/${eventId}/group-checkin`, {
+          attendeeIds,
+          orderCode: members[0]?.orderCode,
+          checkedInBy: 'admin',
+        });
         data = await res.json();
       } else {
         const headers = { 'Content-Type': 'application/json', ...(getStaffAuthHeaders ? getStaffAuthHeaders() : {}) };
