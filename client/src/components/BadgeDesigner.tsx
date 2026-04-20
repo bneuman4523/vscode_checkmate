@@ -1447,7 +1447,7 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
               ))}
 
               {includeQR && (() => {
-                const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+                const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
                 const positions: Record<string, { x: number; y: number }> = {
                   'top-left': { x: 10, y: 10 },
                   'top-center': { x: (badgeWidthPx - qrSize) / 2, y: 10 },

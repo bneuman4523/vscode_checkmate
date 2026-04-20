@@ -435,7 +435,7 @@ export default function DraggableBadgeCanvas({
       let newY = elementStartRef.current.y + deltaY;
 
       if (draggingQR && onUpdateQrPosition) {
-        const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+        const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
         newX = Math.max(0, Math.min(badgeWidthPx - qrSize, newX));
         newY = Math.max(0, Math.min(badgeHeightPx - qrSize, newY));
 
@@ -598,7 +598,7 @@ export default function DraggableBadgeCanvas({
   };
 
   const getQRCodePosition = () => {
-    const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+    const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
     if (qrPosition === 'custom' && customQrPosition) {
       return {
         x: Math.max(0, Math.min(badgeWidthPx - qrSize, customQrPosition.x)),

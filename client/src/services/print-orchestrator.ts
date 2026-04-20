@@ -255,7 +255,7 @@ class PrintOrchestrator {
 
       return await QRCode.toDataURL(qrData, {
         width: 300,
-        margin: 1,
+        margin: 2,
         errorCorrectionLevel: 'H',
         color: { dark: '#000000', light: '#FFFFFF' },
       });
@@ -617,7 +617,7 @@ class PrintOrchestrator {
     // Add QR code if enabled
     let qrCodeHTML = '';
     if (includeQR && badgeData.qrCode) {
-      const qrSize = Math.min(widthPx, heightPx) * 0.2; // 20% of smallest dimension
+      const qrSize = Math.min(widthPx, heightPx) * 0.3; // 30% of smallest dimension for reliable scanning
       let qrLeft = 0, qrTop = 0;
       
       switch (qrPosition) {
@@ -820,7 +820,7 @@ class PrintOrchestrator {
     dpiScale: number
   ): Promise<void> {
     return new Promise((resolve) => {
-      const qrSize = Math.min(widthPx, panelHeightPx) * 0.2;
+      const qrSize = Math.min(widthPx, panelHeightPx) * 0.3;
       let qrLeft = 0, qrTop = 0;
 
       switch (qrPosition) {
