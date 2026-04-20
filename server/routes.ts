@@ -7062,8 +7062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const dbUser = (req as any).dbUser;
-      if (!dbUser?.isSuperAdmin && event.customerId !== dbUser?.customerId) {
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
         return res.status(403).json({ error: "Forbidden" });
       }
       
