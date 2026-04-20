@@ -7,16 +7,20 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { playCheckinSound, playErrorSound } from "@/lib/sounds";
 import { useBehaviorTracking } from "@/hooks/useBehaviorTracking";
-import { 
-  CheckCircle2, 
-  QrCode, 
-  Printer, 
-  ArrowLeft, 
+import { useGroupCheckin } from "@/hooks/useGroupCheckin";
+import type { GroupMember } from "@/hooks/useGroupCheckin";
+import GroupCheckinCard from "@/components/group/GroupCheckinCard";
+import {
+  CheckCircle2,
+  QrCode,
+  Printer,
+  ArrowLeft,
   Lock,
   LogOut,
   Search,
   UserCheck,
   UserPlus,
+  Users,
   XCircle,
   Wifi,
   WifiOff,
@@ -62,7 +66,7 @@ import QRScanner from "@/components/QRScanner";
 import { parseQrCode } from "@/lib/qr-parser";
 import BadgeAIChat from "@/components/BadgeAIChat";
 
-type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "success" | "printing" | "error";
+type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "group" | "success" | "printing" | "error";
 
 interface TemplateMappingEntry {
   templateId: string | null;
@@ -113,12 +117,21 @@ export default function KioskMode({
   const [logoTapCount, setLogoTapCount] = useState(0);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [branding, setBranding] = useState<KioskBrandingConfig | null>(null);
+  const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
+  const [groupCheckedInMembers, setGroupCheckedInMembers] = useState<GroupMember[]>([]);
+  const [groupPrintIndex, setGroupPrintIndex] = useState(0);
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const networkPrint = useNetworkPrint();
   const { trackStart, trackComplete, trackAbandon } = useBehaviorTracking();
   const { theme: appTheme, setTheme } = useTheme();
   const previousThemeRef = useRef(appTheme);
+
+  const groupCheckin = useGroupCheckin({
+    eventId: eventId || '',
+    mode: 'kiosk',
+    pin: exitPin,
+  });
 
   useEffect(() => {
     const kioskTheme = branding?.kioskTheme || kioskSettings?.kioskTheme;
@@ -442,7 +455,11 @@ export default function KioskMode({
     setLastScanned(null);
     setScanError(null);
     setManualInput("");
-  }, []);
+    groupCheckin.reset();
+    setGroupScannedMemberId(null);
+    setGroupCheckedInMembers([]);
+    setGroupPrintIndex(0);
+  }, [groupCheckin]);
 
   // Kiosk idle timeout disabled through beta - re-enable by removing the `false &&` below
   const { showWarning: showKioskWarning, remainingSeconds: kioskRemaining, stayActive: kioskStayActive } = useIdleTimeout({
@@ -574,6 +591,15 @@ export default function KioskMode({
     if (!manualInput.trim()) return;
 
     if (exitPin && eventId) {
+      // Try group lookup first if enabled
+      if (isGroupCheckinEnabled) {
+        const isGroup = await attemptGroupLookup(manualInput.trim());
+        if (isGroup) {
+          setManualInput("");
+          return;
+        }
+      }
+
       try {
         const res = await fetch(`/api/kiosk/${eventId}/search`, {
           method: 'POST',
@@ -738,7 +764,53 @@ export default function KioskMode({
     }
   };
 
-  const handleQRScan = (code: string) => {
+  const isGroupCheckinEnabled = Boolean((event?.tempStaffSettings as any)?.groupCheckinEnabled);
+
+  // Attempt group lookup: returns {found, memberCount, scannedMemberId} or null on failure.
+  // If a multi-member group is found, populates the groupCheckin hook state and transitions to group step.
+  const attemptGroupLookup = useCallback(async (scannedValue: string): Promise<boolean> => {
+    if (!isGroupCheckinEnabled || !exitPin || !eventId) return false;
+
+    try {
+      // Peek at the group data first via direct fetch
+      const res = await fetch(`/api/kiosk/${eventId}/group-lookup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: exitPin, orderCode: scannedValue }),
+      });
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      if (!data.found || !data.members || data.members.length <= 1) {
+        return false;
+      }
+
+      // It's a real multi-member group — now populate the hook state
+      await groupCheckin.lookupGroup(scannedValue);
+
+      // Determine which member was scanned
+      const scannedMember = (data.members as GroupMember[]).find(
+        m => m.orderCode === scannedValue || m.externalId === scannedValue
+      );
+      setGroupScannedMemberId(scannedMember?.id || null);
+      setStep("group");
+      return true;
+    } catch {
+      groupCheckin.reset();
+      return false;
+    }
+  }, [isGroupCheckinEnabled, exitPin, eventId, groupCheckin]);
+
+  const handleQRScan = async (code: string) => {
+    const trimmed = code.trim();
+
+    // Pass 1: Try as orderCode for group check-in
+    if (isGroupCheckinEnabled && exitPin && eventId) {
+      const isGroup = await attemptGroupLookup(trimmed);
+      if (isGroup) return;
+    }
+
+    // Pass 2: Standard single check-in flow (match by externalId/regCode/etc.)
     const result = parseQrCode(code, effectiveAttendees as Attendee[]);
 
     if (result.type === "found" && result.attendee) {
@@ -756,157 +828,316 @@ export default function KioskMode({
     }
   };
 
-  const handlePrintBadge = async () => {
-    if (!lastScanned) return;
-    
-    trackStart("kiosk", "print");
-    setStep("printing");
-    
+  const handleGroupConfirm = async () => {
     try {
-      const attendeeData = {
-        firstName: lastScanned.firstName,
-        lastName: lastScanned.lastName,
-        company: lastScanned.company || "",
-        title: lastScanned.title || "",
-        participantType: lastScanned.participantType || "General",
-        customFields: lastScanned.customFields || {},
-      };
+      const result = await groupCheckin.checkInSelected();
+      playCheckinSound();
 
-      const participantType = lastScanned.participantType || "General";
-      let template: BadgeTemplate | undefined;
+      // Gather the members who were successfully checked in for printing
+      const checkedInIds = Array.from(groupCheckin.selectedIds);
+      const justCheckedIn = groupCheckin.members.filter(m => checkedInIds.includes(m.id));
+      setGroupCheckedInMembers(justCheckedIn);
 
-      const effectiveForcedId = forcedBadgeTemplateId || kioskSettings?.forcedBadgeTemplateId;
-
-      if (effectiveForcedId) {
-        template = templates.find(t => t.id === effectiveForcedId);
-      } else if (templateMappings) {
-        const normalizedType = participantType.trim().toLowerCase();
-        const mapping = Object.entries(templateMappings).find(
-          ([key]) => key.trim().toLowerCase() === normalizedType
-        );
-        if (mapping?.[1]?.templateId) {
-          template = templates.find(t => t.id === mapping[1].templateId);
-        }
+      // Find primary for the success message
+      const primary = groupCheckin.members.find(m => m.id === groupCheckin.primaryId);
+      if (primary) {
+        setLastScanned({
+          id: primary.id,
+          firstName: primary.firstName,
+          lastName: primary.lastName,
+          email: primary.email || null,
+          company: primary.company || null,
+          title: primary.title || null,
+          participantType: primary.participantType || "General",
+          checkedIn: true,
+          customFields: {},
+          externalId: primary.externalId || null,
+        } as Attendee);
       }
 
-      if (!template) {
-        template = templates.find(t => t.id === event?.defaultBadgeTemplateId) || templates[0];
-      }
+      trackComplete("kiosk", "scan");
 
-      
-      const templateConfig = {
-        width: template?.width || 4,
-        height: template?.height || 3,
-        backgroundColor: template?.backgroundColor || "#ffffff",
-        textColor: template?.textColor || "#000000",
-        accentColor: template?.accentColor || "#3b82f6",
-        fontFamily: template?.fontFamily || "Arial",
-        includeQR: template?.includeQR ?? true,
-        qrPosition: template?.qrPosition || "bottom-right",
-        customQrPosition: (template as any)?.customQrPosition || undefined,
-        qrCodeConfig: (template?.qrCodeConfig as any) || undefined,
-        mergeFields: (template?.mergeFields as any[]) || [],
-        imageElements: (template as any)?.imageElements || [],
-      };
-
-      if (selectedPrinter?.type === 'printnode' && selectedPrinter.printNodeId) {
-        
-        const printerName = selectedPrinter.printerName || '';
-        const isZebraPrinter = 
-          printerName.toLowerCase().includes('zebra') || 
-          printerName.toLowerCase().includes('zd') ||
-          printerName.toLowerCase().includes('zt') ||
-          printerName.toLowerCase().includes('zp');
-
-        let printResponse: Response;
-
-        if (isZebraPrinter) {
-          const zplBadgeData = {
-            firstName: attendeeData.firstName,
-            lastName: attendeeData.lastName,
-            company: attendeeData.company,
-            title: attendeeData.title,
-            externalId: lastScanned.externalId || undefined,
-          };
-          const zplTemplate = {
-            width: templateConfig.width,
-            height: templateConfig.height,
-            includeQR: templateConfig.includeQR,
-            qrData: lastScanned.externalId || `${lastScanned.firstName}-${lastScanned.lastName}`,
-          };
-          const zplData = networkPrint.generateBadgeZpl(zplBadgeData, zplTemplate);
-          
-          printResponse = await fetch('/api/printnode/print', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              printerId: selectedPrinter.printNodeId,
-              zplData,
-              title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}`,
-            }),
-          });
+      if (isOnline) {
+        if (staffToken) {
+          queryClient.invalidateQueries({ queryKey: ['/api/staff/attendees-kiosk'] });
         } else {
-          const pnRotation = (template?.labelRotation || 0) as 0 | 90 | 180 | 270;
-          const pdfBlob = await printOrchestrator.generatePDFBlob(attendeeData, templateConfig, pnRotation);
-          const pdfArrayBuffer = await pdfBlob.arrayBuffer();
-          const pdfBase64 = btoa(
-            new Uint8Array(pdfArrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-          );
+          queryClient.invalidateQueries({ queryKey: [`/api/attendees?eventId=${eventId}`] });
+        }
+      }
 
-          printResponse = await fetch('/api/printnode/print', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              printerId: selectedPrinter.printNodeId,
-              pdfBase64,
-              title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}`,
-            }),
-          });
-        }
+      // Go to success — user can print from there
+      setStep("success");
+    } catch (error) {
+      console.error("Group check-in failed:", error);
+      playErrorSound();
+      setScanError("Group check-in failed. Please try again.");
+      setStep("scanning");
+    }
+  };
 
-        const printResult = await printResponse.json();
-        if (!printResponse.ok || !printResult.success) {
-          throw new Error(printResult.error || 'PrintNode print failed');
+  const handleGroupCheckInJustMe = () => {
+    // Find the scanned member and do a single check-in
+    const scannedId = groupScannedMemberId || groupCheckin.primaryId;
+    if (scannedId) {
+      const member = groupCheckin.members.find(m => m.id === scannedId);
+      if (member) {
+        groupCheckin.reset();
+        setGroupScannedMemberId(null);
+        setGroupCheckedInMembers([]);
+        if (member.checkedIn) {
+          setLastScanned({
+            id: member.id,
+            firstName: member.firstName,
+            lastName: member.lastName,
+            email: member.email || null,
+            company: member.company || null,
+            title: member.title || null,
+            participantType: member.participantType || "General",
+            checkedIn: true,
+            customFields: {},
+            externalId: member.externalId || null,
+          } as Attendee);
+          setScanError("Already checked in");
+          trackComplete("kiosk", "scan");
+          setStep("success");
+        } else {
+          checkInMutation.mutate(scannedId);
         }
-        
-      } else if (selectedPrinter?.type === 'custom' || selectedPrinter?.type === 'local') {
-        const ip = selectedPrinter.type === 'custom' ? selectedPrinter.customIp : selectedPrinter.ipAddress;
-        const port = selectedPrinter.type === 'custom' ? selectedPrinter.customPort : (selectedPrinter.port || 9100);
-        const dpi = selectedPrinter.type === 'custom' ? selectedPrinter.customDpi : (selectedPrinter.dpi || 203);
-        if (ip) {
-          networkPrint.setIp(ip);
-          networkPrint.setPort(port);
-          networkPrint.setDpi(dpi);
-        }
+      }
+    }
+  };
+
+  const handleGroupBack = () => {
+    groupCheckin.reset();
+    setGroupScannedMemberId(null);
+    setGroupCheckedInMembers([]);
+    setStep("scanning");
+  };
+
+  // Print a single badge for a given member (used by both single and group flows)
+  const printBadgeForMember = async (memberData: {
+    firstName: string;
+    lastName: string;
+    company: string;
+    title: string;
+    participantType: string;
+    customFields: Record<string, any>;
+    externalId?: string;
+  }) => {
+    const attendeeData = {
+      firstName: memberData.firstName,
+      lastName: memberData.lastName,
+      company: memberData.company || "",
+      title: memberData.title || "",
+      participantType: memberData.participantType || "General",
+      customFields: memberData.customFields || {},
+    };
+
+    const participantType = memberData.participantType || "General";
+    let template: BadgeTemplate | undefined;
+
+    const effectiveForcedId = forcedBadgeTemplateId || kioskSettings?.forcedBadgeTemplateId;
+
+    if (effectiveForcedId) {
+      template = templates.find(t => t.id === effectiveForcedId);
+    } else if (templateMappings) {
+      const normalizedType = participantType.trim().toLowerCase();
+      const mapping = Object.entries(templateMappings).find(
+        ([key]) => key.trim().toLowerCase() === normalizedType
+      );
+      if (mapping?.[1]?.templateId) {
+        template = templates.find(t => t.id === mapping[1].templateId);
+      }
+    }
+
+    if (!template) {
+      template = templates.find(t => t.id === event?.defaultBadgeTemplateId) || templates[0];
+    }
+
+    const templateConfig = {
+      width: template?.width || 4,
+      height: template?.height || 3,
+      backgroundColor: template?.backgroundColor || "#ffffff",
+      textColor: template?.textColor || "#000000",
+      accentColor: template?.accentColor || "#3b82f6",
+      fontFamily: template?.fontFamily || "Arial",
+      includeQR: template?.includeQR ?? true,
+      qrPosition: template?.qrPosition || "bottom-right",
+      customQrPosition: (template as any)?.customQrPosition || undefined,
+      qrCodeConfig: (template?.qrCodeConfig as any) || undefined,
+      mergeFields: (template?.mergeFields as any[]) || [],
+      imageElements: (template as any)?.imageElements || [],
+    };
+
+    if (selectedPrinter?.type === 'printnode' && selectedPrinter.printNodeId) {
+      const printerName = selectedPrinter.printerName || '';
+      const isZebraPrinter =
+        printerName.toLowerCase().includes('zebra') ||
+        printerName.toLowerCase().includes('zd') ||
+        printerName.toLowerCase().includes('zt') ||
+        printerName.toLowerCase().includes('zp');
+
+      let printResponse: Response;
+
+      if (isZebraPrinter) {
         const zplBadgeData = {
           firstName: attendeeData.firstName,
           lastName: attendeeData.lastName,
           company: attendeeData.company,
           title: attendeeData.title,
-          externalId: lastScanned.externalId || undefined,
+          externalId: memberData.externalId || undefined,
         };
         const zplTemplate = {
           width: templateConfig.width,
           height: templateConfig.height,
           includeQR: templateConfig.includeQR,
-          qrData: lastScanned.externalId || `${lastScanned.firstName}-${lastScanned.lastName}`,
+          qrData: memberData.externalId || `${attendeeData.firstName}-${attendeeData.lastName}`,
         };
         const zplData = networkPrint.generateBadgeZpl(zplBadgeData, zplTemplate);
-        const result = await networkPrint.printZpl(zplData);
-        if (!result.success) throw new Error(result.error || 'Network print failed');
+
+        printResponse = await fetch('/api/printnode/print', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            printerId: selectedPrinter.printNodeId,
+            zplData,
+            title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}`,
+          }),
+        });
       } else {
-        const rotation = (template?.labelRotation || 0) as 0 | 90 | 180 | 270;
-        await printOrchestrator.printBadge(attendeeData, templateConfig, rotation);
+        const pnRotation = (template?.labelRotation || 0) as 0 | 90 | 180 | 270;
+        const pdfBlob = await printOrchestrator.generatePDFBlob(attendeeData, templateConfig, pnRotation);
+        const pdfArrayBuffer = await pdfBlob.arrayBuffer();
+        const pdfBase64 = btoa(
+          new Uint8Array(pdfArrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
+
+        printResponse = await fetch('/api/printnode/print', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            printerId: selectedPrinter.printNodeId,
+            pdfBase64,
+            title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}`,
+          }),
+        });
       }
 
-      toast({
-        title: "Badge Sent to Printer",
-        description: selectedPrinter?.type === 'printnode' 
-          ? `Sent to ${selectedPrinter.printerName || 'cloud printer'}`
-          : "Your badge is being printed",
-      });
+      const printResult = await printResponse.json();
+      if (!printResponse.ok || !printResult.success) {
+        throw new Error(printResult.error || 'PrintNode print failed');
+      }
+    } else if (selectedPrinter?.type === 'custom' || selectedPrinter?.type === 'local') {
+      const ip = selectedPrinter.type === 'custom' ? selectedPrinter.customIp : selectedPrinter.ipAddress;
+      const port = selectedPrinter.type === 'custom' ? selectedPrinter.customPort : (selectedPrinter.port || 9100);
+      const dpi = selectedPrinter.type === 'custom' ? selectedPrinter.customDpi : (selectedPrinter.dpi || 203);
+      if (ip) {
+        networkPrint.setIp(ip);
+        networkPrint.setPort(port);
+        networkPrint.setDpi(dpi);
+      }
+      const zplBadgeData = {
+        firstName: attendeeData.firstName,
+        lastName: attendeeData.lastName,
+        company: attendeeData.company,
+        title: attendeeData.title,
+        externalId: memberData.externalId || undefined,
+      };
+      const zplTemplate = {
+        width: templateConfig.width,
+        height: templateConfig.height,
+        includeQR: templateConfig.includeQR,
+        qrData: memberData.externalId || `${attendeeData.firstName}-${attendeeData.lastName}`,
+      };
+      const zplData = networkPrint.generateBadgeZpl(zplBadgeData, zplTemplate);
+      const result = await networkPrint.printZpl(zplData);
+      if (!result.success) throw new Error(result.error || 'Network print failed');
+    } else {
+      const rotation = (template?.labelRotation || 0) as 0 | 90 | 180 | 270;
+      await printOrchestrator.printBadge(attendeeData, templateConfig, rotation);
+    }
+  };
+
+  const handlePrintBadge = async () => {
+    if (!lastScanned && groupCheckedInMembers.length === 0) return;
+
+    trackStart("kiosk", "print");
+    setStep("printing");
+
+    try {
+      // Determine who to print for: group members or single attendee
+      const membersToPrint: Array<{
+        firstName: string;
+        lastName: string;
+        company: string;
+        title: string;
+        participantType: string;
+        customFields: Record<string, any>;
+        externalId?: string;
+      }> = [];
+
+      if (groupCheckedInMembers.length > 0) {
+        // Group flow — print for all checked-in members
+        for (const member of groupCheckedInMembers) {
+          membersToPrint.push({
+            firstName: member.firstName,
+            lastName: member.lastName,
+            company: member.company || "",
+            title: member.title || "",
+            participantType: member.participantType || "General",
+            customFields: {},
+            externalId: member.externalId || undefined,
+          });
+        }
+      } else if (lastScanned) {
+        // Single flow
+        membersToPrint.push({
+          firstName: lastScanned.firstName,
+          lastName: lastScanned.lastName,
+          company: lastScanned.company || "",
+          title: lastScanned.title || "",
+          participantType: lastScanned.participantType || "General",
+          customFields: lastScanned.customFields || {},
+          externalId: lastScanned.externalId || undefined,
+        });
+      }
+
+      if (membersToPrint.length > 1) {
+        // Group: send all print jobs in parallel
+        let printedCount = 0;
+        setGroupPrintIndex(0);
+        const printResults = await Promise.allSettled(
+          membersToPrint.map((member) =>
+            printBadgeForMember(member).then(() => {
+              printedCount++;
+              setGroupPrintIndex(printedCount);
+            })
+          )
+        );
+        const succeeded = printResults.filter(r => r.status === 'fulfilled').length;
+        const failed = printResults.filter(r => r.status === 'rejected').length;
+        toast({
+          title: failed > 0 ? `${succeeded} of ${membersToPrint.length} Badges Printed` : `${succeeded} Badges Sent to Printer`,
+          description: failed > 0
+            ? `${failed} badge${failed !== 1 ? 's' : ''} failed to print. Reprint from the attendee list.`
+            : selectedPrinter?.type === 'printnode'
+              ? `Sent to ${selectedPrinter.printerName || 'cloud printer'}`
+              : `${succeeded} badges are being printed`,
+          variant: failed > 0 ? "destructive" : "default",
+        });
+      } else {
+        // Single: print one badge
+        setGroupPrintIndex(1);
+        await printBadgeForMember(membersToPrint[0]);
+        toast({
+          title: "Badge Sent to Printer",
+          description: selectedPrinter?.type === 'printnode'
+            ? `Sent to ${selectedPrinter.printerName || 'cloud printer'}`
+            : "Your badge is being printed",
+        });
+      }
 
       setTimeout(() => {
         handleReset();
@@ -930,6 +1161,10 @@ export default function KioskMode({
     setScanError(null);
     setManualInput("");
     setSearchResults([]);
+    groupCheckin.reset();
+    setGroupScannedMemberId(null);
+    setGroupCheckedInMembers([]);
+    setGroupPrintIndex(0);
   };
 
   const checkedInCount = effectiveAttendees.filter(a => a.checkedIn).length;
@@ -1329,6 +1564,38 @@ export default function KioskMode({
                 </div>
               )}
 
+              {step === "group" && groupCheckin.isGroupFound && (
+                <div className="space-y-6">
+                  <div className="text-center space-y-2">
+                    <h2 className="text-3xl font-semibold">Group Check-In</h2>
+                    <p className="text-lg text-muted-foreground">
+                      Select who you'd like to check in
+                    </p>
+                  </div>
+
+                  <GroupCheckinCard
+                    members={groupCheckin.members}
+                    primaryId={groupCheckin.primaryId}
+                    selectedIds={groupCheckin.selectedIds}
+                    onToggleMember={groupCheckin.toggleMember}
+                    onSelectAll={groupCheckin.selectAll}
+                    onDeselectAll={groupCheckin.deselectAll}
+                    onConfirm={handleGroupConfirm}
+                    onCheckInJustMe={handleGroupCheckInJustMe}
+                    mode="kiosk"
+                    isProcessing={groupCheckin.isProcessing}
+                    scannedMemberId={groupScannedMemberId || undefined}
+                  />
+
+                  <div className="text-center pt-2">
+                    <Button variant="outline" onClick={handleGroupBack} data-testid="button-group-back">
+                      <ArrowLeft className="h-4 w-4 mr-2" />
+                      Back to Scan
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {step === "success" && lastScanned && (
                 <div className="text-center space-y-6">
                   <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-500/10 mb-2">
@@ -1336,8 +1603,16 @@ export default function KioskMode({
                   </div>
                   <div className="space-y-2">
                     <h2 className="text-3xl font-semibold" data-testid="text-kiosk-welcome">
-                      Welcome, {lastScanned.firstName}!
+                      {groupCheckedInMembers.length > 1
+                        ? `Welcome, ${lastScanned.firstName} & Party!`
+                        : `Welcome, ${lastScanned.firstName}!`}
                     </h2>
+                    {groupCheckedInMembers.length > 1 && (
+                      <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                        <Users className="h-4 w-4" />
+                        <span>{groupCheckedInMembers.length} checked in</span>
+                      </div>
+                    )}
                     {scanError === "Already checked in" ? (
                       <Badge className="bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-base px-4 py-1">
                         Already Checked In
@@ -1366,7 +1641,9 @@ export default function KioskMode({
                       data-testid="button-kiosk-print"
                     >
                       <Printer className="h-6 w-6 mr-3" />
-                      Print My Badge
+                      {groupCheckedInMembers.length > 1
+                        ? `Print ${groupCheckedInMembers.length} Badges`
+                        : "Print My Badge"}
                     </Button>
                     <Button
                       variant="outline"
@@ -1384,7 +1661,11 @@ export default function KioskMode({
               {step === "printing" && (
                 <div className="text-center space-y-6">
                   <div className="space-y-2">
-                    <h2 className="text-3xl font-semibold">Printing Your Badge...</h2>
+                    <h2 className="text-3xl font-semibold">
+                      {groupCheckedInMembers.length > 1
+                        ? `Printing ${groupCheckedInMembers.length} Badges...`
+                        : "Printing Your Badge..."}
+                    </h2>
                     <p className="text-lg text-muted-foreground">
                       Please wait, this will only take a moment
                     </p>
@@ -1392,9 +1673,15 @@ export default function KioskMode({
                   <div className="flex items-center justify-center">
                     <Printer className="h-24 w-24 text-primary animate-pulse" />
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Your badge will be ready shortly
-                  </p>
+                  {groupCheckedInMembers.length > 1 && groupPrintIndex > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Printing badge {groupPrintIndex} of {groupCheckedInMembers.length}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Your badge will be ready shortly
+                    </p>
+                  )}
                 </div>
               )}
 

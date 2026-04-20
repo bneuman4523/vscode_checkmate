@@ -383,6 +383,8 @@ export const events = pgTable("events", {
     allowKioskFromStaff?: boolean;
     defaultRegistrationStatusFilter?: RegistrationStatus[];
     allowGroupCheckin?: boolean;
+    groupDisclaimerMode?: 'group' | 'individual';
+    groupCheckinEnabled?: boolean;
     allowKioskWalkins?: boolean;
     kioskWalkinConfig?: {
       enabledFields: string[];
@@ -1667,6 +1669,8 @@ export interface StaffSettingsSnapshot {
   passcode?: string; // Plain text - will be hashed when applied
   printPreviewOnCheckin?: boolean;
   defaultRegistrationStatusFilter?: RegistrationStatus[];
+  groupDisclaimerMode?: 'group' | 'individual';
+  groupCheckinEnabled?: boolean;
 }
 
 // Event Configuration Templates table

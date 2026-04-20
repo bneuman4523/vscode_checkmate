@@ -108,6 +108,8 @@ interface TempStaffSettings {
   allowWalkins: boolean;
   allowKioskFromStaff: boolean;
   allowGroupCheckin?: boolean;
+  groupDisclaimerMode?: 'group' | 'individual';
+  groupCheckinEnabled?: boolean;
   allowKioskWalkins?: boolean;
   kioskWalkinConfig?: KioskWalkinConfig;
 }
@@ -138,6 +140,8 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [staffAllowWalkins, setStaffAllowWalkins] = useState(false);
   const [staffAllowKiosk, setStaffAllowKiosk] = useState(false);
   const [staffAllowGroupCheckin, setStaffAllowGroupCheckin] = useState(false);
+  const [groupDisclaimerMode, setGroupDisclaimerMode] = useState<'group' | 'individual'>('group');
+  const [groupCheckinEnabled, setGroupCheckinEnabled] = useState(false);
   const [kioskWalkinsEnabled, setKioskWalkinsEnabled] = useState(false);
   const [kioskWalkinConfig, setKioskWalkinConfig] = useState<KioskWalkinConfig>({
     enabledFields: ['firstName', 'lastName', 'email', 'participantType'],
@@ -361,6 +365,8 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       setStaffAllowWalkins(tempStaffSettings.allowWalkins || false);
       setStaffAllowKiosk(tempStaffSettings.allowKioskFromStaff || false);
       setStaffAllowGroupCheckin(tempStaffSettings.allowGroupCheckin || false);
+      setGroupDisclaimerMode(tempStaffSettings.groupDisclaimerMode || 'group');
+      setGroupCheckinEnabled(tempStaffSettings.groupCheckinEnabled || false);
       setKioskWalkinsEnabled(tempStaffSettings.allowKioskWalkins || false);
       if (tempStaffSettings.kioskWalkinConfig) {
         setKioskWalkinConfig(tempStaffSettings.kioskWalkinConfig);
@@ -592,11 +598,13 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       return;
     }
     
-    const settings: { enabled?: boolean; passcode?: string; startTime?: string; endTime?: string; allowWalkins?: boolean; allowKioskFromStaff?: boolean; allowGroupCheckin?: boolean; allowKioskWalkins?: boolean; kioskWalkinConfig?: KioskWalkinConfig } = {
+    const settings: { enabled?: boolean; passcode?: string; startTime?: string; endTime?: string; allowWalkins?: boolean; allowKioskFromStaff?: boolean; allowGroupCheckin?: boolean; groupDisclaimerMode?: 'group' | 'individual'; groupCheckinEnabled?: boolean; allowKioskWalkins?: boolean; kioskWalkinConfig?: KioskWalkinConfig } = {
       enabled: staffEnabled,
       allowWalkins: staffAllowWalkins,
       allowKioskFromStaff: staffAllowKiosk,
       allowGroupCheckin: staffAllowGroupCheckin,
+      groupDisclaimerMode: groupDisclaimerMode,
+      groupCheckinEnabled: groupCheckinEnabled,
       allowKioskWalkins: kioskWalkinsEnabled,
       kioskWalkinConfig: kioskWalkinsEnabled ? kioskWalkinConfig : undefined,
     };
@@ -946,21 +954,76 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
               </div>
 
               {featureFlags.groupCheckin && (
-                <div className="flex items-center justify-between rounded-lg border p-3">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm font-medium flex items-center gap-2">
-                      <UsersRound className="h-4 w-4" />
-                      Group Check-in
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Allow staff to check in multiple attendees at once from the same party or group
-                    </p>
+                <div className="rounded-lg border p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium flex items-center gap-2">
+                        <UsersRound className="h-4 w-4" />
+                        Group Check-in
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Allow staff to check in multiple attendees at once from the same party or group
+                      </p>
+                    </div>
+                    <Switch
+                      checked={staffAllowGroupCheckin}
+                      onCheckedChange={(checked) => {
+                        setStaffAllowGroupCheckin(checked);
+                        if (checked) {
+                          setGroupCheckinEnabled(true);
+                        } else {
+                          setGroupCheckinEnabled(false);
+                        }
+                      }}
+                      data-testid="switch-allow-group-checkin"
+                    />
                   </div>
-                  <Switch
-                    checked={staffAllowGroupCheckin}
-                    onCheckedChange={setStaffAllowGroupCheckin}
-                    data-testid="switch-allow-group-checkin"
-                  />
+
+                  {staffAllowGroupCheckin && (
+                    <div className="ml-4 pl-4 border-l-2 border-muted space-y-2">
+                      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        Disclaimer Handling
+                      </Label>
+                      <RadioGroup
+                        value={groupDisclaimerMode}
+                        onValueChange={(value) => setGroupDisclaimerMode(value as 'group' | 'individual')}
+                        className="space-y-2"
+                      >
+                        <Label
+                          htmlFor="disclaimer-mode-group"
+                          className={`flex items-start gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                            groupDisclaimerMode === "group"
+                              ? "border-primary bg-primary/5"
+                              : "border-muted hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          <RadioGroupItem value="group" id="disclaimer-mode-group" className="mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="text-sm font-medium">Primary signs for group</span>
+                            <p className="text-xs text-muted-foreground">
+                              Fast mode. Group leader acknowledges on behalf of everyone.
+                            </p>
+                          </div>
+                        </Label>
+                        <Label
+                          htmlFor="disclaimer-mode-individual"
+                          className={`flex items-start gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                            groupDisclaimerMode === "individual"
+                              ? "border-primary bg-primary/5"
+                              : "border-muted hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          <RadioGroupItem value="individual" id="disclaimer-mode-individual" className="mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="text-sm font-medium">Each member signs individually</span>
+                            <p className="text-xs text-muted-foreground">
+                              Compliance mode. Each person must sign separately.
+                            </p>
+                          </div>
+                        </Label>
+                      </RadioGroup>
+                    </div>
+                  )}
                 </div>
               )}
 

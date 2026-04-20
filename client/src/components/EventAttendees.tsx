@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { playCheckinSound } from "@/lib/sounds";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -33,6 +35,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -54,10 +63,13 @@ import {
   Send,
   Mail,
   Cloud,
+  Users,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { WorkflowRunner } from "./workflow/WorkflowRunner";
+import { useGroupCheckin } from "@/hooks/useGroupCheckin";
+import GroupCheckinCard from "./group/GroupCheckinCard";
 import { printOrchestrator } from "@/services/print-orchestrator";
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import BadgeRenderSurface from "./BadgeRenderSurface";
@@ -128,14 +140,21 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
   const [printPreviewTemplate, setPrintPreviewTemplate] = useState<BadgeTemplate | null>(null);
   const [printPreviewResolution, setPrintPreviewResolution] = useState<string | null>(null);
   const [isPrintingFromPreview, setIsPrintingFromPreview] = useState(false);
+  const [groupSheetOpen, setGroupSheetOpen] = useState(false);
+  const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
+  const [groupOrderCode, setGroupOrderCode] = useState<string | null>(null);
+  const [skipGroupWorkflow, setSkipGroupWorkflow] = useState(false);
+  const [isGroupPrinting, setIsGroupPrinting] = useState(false);
   const { toast } = useToast();
   const networkPrint = useNetworkPrint();
   const fontContext = useFontsOptional();
 
+  const groupCheckin = useGroupCheckin({ eventId, mode: 'staff' });
 
   const { data: eventData } = useQuery<{
     customerId?: string;
     syncSettings?: { selectedStatuses?: string[]; statusesConfigured?: boolean } | null;
+    tempStaffSettings?: { enabled?: boolean; groupCheckinEnabled?: boolean } | null;
   }>({
     queryKey: ["/api/events", eventId],
     enabled: !!eventId,
@@ -225,6 +244,126 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
   const hasActiveWorkflow = workflowConfig?.enabled &&
     (workflowConfig?.steps?.filter(s => s.enabled).length ?? 0) > 0;
 
+  const isGroupCheckinEnabled = Boolean(eventData?.tempStaffSettings?.groupCheckinEnabled);
+
+  // Open the group sheet for a given order code. Returns true if a multi-member group was found.
+  const openGroupSheet = useCallback(async (orderCode: string, scannedMemberId?: string): Promise<boolean> => {
+    try {
+      // Peek at the group data first to check member count before populating the hook
+      const res = await apiRequest('GET', `/api/events/${eventId}/group/${encodeURIComponent(orderCode)}`);
+      const data = await res.json();
+
+      if (!data.found || !data.members || data.members.length <= 1) {
+        return false;
+      }
+
+      // Multi-member group found — now populate the hook state
+      const found = await groupCheckin.lookupGroup(orderCode);
+      if (found) {
+        setGroupOrderCode(orderCode);
+        setGroupScannedMemberId(scannedMemberId || null);
+        setSkipGroupWorkflow(false);
+        setGroupSheetOpen(true);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("[EventAttendees] Group lookup failed:", err);
+      return false;
+    }
+  }, [eventId, groupCheckin]);
+
+  const handleOrderCodeClick = useCallback(async (orderCode: string) => {
+    await openGroupSheet(orderCode);
+  }, [openGroupSheet]);
+
+  const closeGroupSheet = useCallback(() => {
+    setGroupSheetOpen(false);
+    setGroupOrderCode(null);
+    setGroupScannedMemberId(null);
+    setSkipGroupWorkflow(false);
+    setIsGroupPrinting(false);
+    groupCheckin.reset();
+  }, [groupCheckin]);
+
+  const handleGroupConfirm = useCallback(async () => {
+    try {
+      const result = await groupCheckin.checkInSelected();
+      playCheckinSound();
+
+      // Gather the members who were successfully checked in for printing
+      const checkedInIds = Array.from(groupCheckin.selectedIds);
+      const justCheckedIn = groupCheckin.members.filter(m =>
+        checkedInIds.includes(m.id) && groupCheckin.checkInResults.get(m.id) === 'success'
+      );
+
+      // Trigger badge printing for all newly checked-in members
+      if (justCheckedIn.length > 0 && printer.savedPrinter) {
+        setIsGroupPrinting(true);
+        let printSuccess = 0;
+        let printFail = 0;
+
+        await Promise.all(
+          justCheckedIn.map(async (member) => {
+            try {
+              const template = getTemplateForParticipantType(member.participantType);
+              if (!template) return;
+
+              // Build a partial Attendee for routePrintJob
+              const attendeeForPrint = {
+                id: member.id,
+                firstName: member.firstName,
+                lastName: member.lastName,
+                email: member.email || '',
+                company: member.company || null,
+                title: member.title || null,
+                participantType: member.participantType,
+                externalId: member.externalId || null,
+                customFields: {},
+                registrationStatus: 'Attended',
+              } as Attendee;
+
+              await routePrintJob(attendeeForPrint, template, printer.savedPrinter!);
+
+              // Mark badge as printed
+              await apiRequest("PATCH", `/api/attendees/${member.id}`, {
+                badgePrinted: true,
+                badgePrintedAt: new Date().toISOString(),
+              });
+              printSuccess++;
+            } catch (err) {
+              console.error(`[EventAttendees] Group print failed for ${member.firstName} ${member.lastName}:`, err);
+              printFail++;
+            }
+          })
+        );
+
+        setIsGroupPrinting(false);
+
+        toast({
+          title: "Group check-in complete",
+          description: `Checked in ${result.checkedIn} people. Printed ${printSuccess} badge${printSuccess !== 1 ? 's' : ''}${printFail > 0 ? `, ${printFail} failed` : ''}.`,
+        });
+      } else {
+        toast({
+          title: "Group check-in complete",
+          description: `${result.checkedIn} ${result.checkedIn === 1 ? 'person' : 'people'} checked in.${!printer.savedPrinter ? ' Select a printer to print badges.' : ''}`,
+        });
+      }
+
+      // Refresh the attendee table
+      queryClient.invalidateQueries({ queryKey: [`/api/attendees?eventId=${eventId}`] });
+
+    } catch (error) {
+      console.error("[EventAttendees] Group check-in failed:", error);
+      toast({
+        title: "Group check-in failed",
+        description: error instanceof Error ? error.message : "Could not complete group check-in",
+        variant: "destructive",
+      });
+    }
+  }, [groupCheckin, printer.savedPrinter, eventId, toast]);
+
   const getTemplateForParticipantType = (participantType: string): BadgeTemplate | null => {
     const mapping = templateMappings[participantType];
     if (mapping?.templateId) {
@@ -292,7 +431,13 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     };
   };
 
-  const handleCheckIn = (attendee: Attendee) => {
+  const handleCheckIn = async (attendee: Attendee) => {
+    // If group check-in is enabled and the attendee has an order code, try group flow
+    if (isGroupCheckinEnabled && attendee.orderCode) {
+      const isGroup = await openGroupSheet(attendee.orderCode, attendee.id);
+      if (isGroup) return; // Group sheet opened, don't do single check-in
+    }
+
     if (hasActiveWorkflow) {
       setWorkflowAttendee(attendee);
       setShowWorkflowRunner(true);
@@ -870,7 +1015,16 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
                       {attendee.externalId || "-"}
                     </TableCell>
                     <TableCell className="hidden lg:table-cell font-mono text-xs text-muted-foreground" data-testid={`text-order-code-${attendee.id}`}>
-                      {attendee.orderCode || "-"}
+                      {attendee.orderCode ? (
+                        <button
+                          onClick={() => handleOrderCodeClick(attendee.orderCode!)}
+                          className="text-primary hover:underline cursor-pointer font-mono"
+                          title="View group"
+                          data-testid={`button-order-code-${attendee.id}`}
+                        >
+                          {attendee.orderCode}
+                        </button>
+                      ) : "-"}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -998,6 +1152,84 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
         onOpenPrinterSettings={printer.openSelector}
         getPreviewTemplateConfig={getPreviewTemplateConfig}
       />
+
+      {/* Group Check-In Sheet */}
+      <Sheet open={groupSheetOpen} onOpenChange={(open) => {
+        if (!open) closeGroupSheet();
+      }}>
+        <SheetContent side="right" className="w-full sm:max-w-md overflow-y-auto" data-testid="group-checkin-sheet">
+          <SheetHeader className="pb-4">
+            <SheetTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Group Check-In
+            </SheetTitle>
+            {groupOrderCode && (
+              <SheetDescription>
+                Order code: <span className="font-mono font-medium text-foreground">{groupOrderCode}</span>
+              </SheetDescription>
+            )}
+          </SheetHeader>
+
+          {groupCheckin.isGroupFound && (
+            <div className="space-y-4">
+              <GroupCheckinCard
+                members={groupCheckin.members}
+                primaryId={groupCheckin.primaryId}
+                selectedIds={groupCheckin.selectedIds}
+                onToggleMember={groupCheckin.toggleMember}
+                onSelectAll={groupCheckin.selectAll}
+                onDeselectAll={groupCheckin.deselectAll}
+                onConfirm={handleGroupConfirm}
+                mode="staff"
+                isProcessing={groupCheckin.isProcessing || isGroupPrinting}
+                scannedMemberId={groupScannedMemberId || undefined}
+              />
+
+              {/* Skip workflow toggle - only show if there is an active workflow */}
+              {hasActiveWorkflow && (
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <Label htmlFor="skip-group-workflow" className="text-sm cursor-pointer">
+                    Skip workflow for group
+                  </Label>
+                  <Switch
+                    id="skip-group-workflow"
+                    checked={skipGroupWorkflow}
+                    onCheckedChange={setSkipGroupWorkflow}
+                    disabled={groupCheckin.isProcessing || isGroupPrinting}
+                    data-testid="switch-skip-group-workflow"
+                  />
+                </div>
+              )}
+
+              {/* Printing status */}
+              {isGroupPrinting && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 rounded-lg bg-muted/50">
+                  <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  Printing badges...
+                </div>
+              )}
+
+              {/* Close button */}
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={closeGroupSheet}
+                disabled={groupCheckin.isProcessing || isGroupPrinting}
+                data-testid="group-sheet-close"
+              >
+                Close
+              </Button>
+            </div>
+          )}
+
+          {groupCheckin.isLookingUp && (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-6 w-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              <span className="ml-2 text-sm text-muted-foreground">Looking up group...</span>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       <PrinterSelector
         open={printer.showSelector}

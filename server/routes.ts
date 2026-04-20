@@ -2341,6 +2341,204 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Group check-in: lookup group by order code (kiosk - PIN required)
+  app.post("/api/kiosk/:eventId/group-lookup", async (req, res) => {
+    try {
+      const { pin, orderCode } = req.body;
+      if (!pin || !orderCode) {
+        return res.status(400).json({ error: "PIN and orderCode are required" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members: members.map((a: any) => ({
+          id: a.id, firstName: a.firstName, lastName: a.lastName,
+          email: a.email, company: a.company, title: a.title,
+          participantType: a.participantType, checkedIn: a.checkedIn,
+          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
+          externalId: a.externalId, orderCode: a.orderCode,
+        })),
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Group check-in: lookup group by order code (staff - auth required)
+  app.get("/api/events/:eventId/group/:orderCode", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members,
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Group check-in: batch check-in multiple attendees at once
+  app.post("/api/events/:eventId/group-checkin", requireAuth, async (req, res) => {
+    try {
+      const { attendeeIds, orderCode, checkedInBy } = req.body;
+      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          // Trigger real-time sync if configured
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
+    }
+  });
+
+  // Kiosk batch check-in (PIN auth)
+  app.post("/api/kiosk/:eventId/group-checkin", async (req, res) => {
+    try {
+      const { pin, attendeeIds, checkedInBy } = req.body;
+      if (!pin || !Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "PIN and attendeeIds are required" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Kiosk Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in kiosk group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in kiosk group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
+    }
+  });
+
   app.post("/api/kiosk/:eventId/walkin", async (req, res) => {
     try {
       const { pin, firstName, lastName, email, participantType, company, title } = req.body;
@@ -8112,7 +8310,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const { enabled, passcode, startTime, endTime, badgeTemplateId, allowedSessionIds, allowWalkins, allowKioskFromStaff, allowGroupCheckin, allowKioskWalkins, kioskWalkinConfig } = req.body;
+      const { enabled, passcode, startTime, endTime, badgeTemplateId, allowedSessionIds, allowWalkins, allowKioskFromStaff, allowGroupCheckin, groupDisclaimerMode, groupCheckinEnabled, allowKioskWalkins, kioskWalkinConfig } = req.body;
 
       // Validate time window
       if (startTime && endTime && new Date(startTime) >= new Date(endTime)) {
@@ -8142,6 +8340,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           allowWalkins: allowWalkins !== undefined ? allowWalkins : (staffSettings?.allowWalkins ?? false),
           allowKioskFromStaff: allowKioskFromStaff !== undefined ? allowKioskFromStaff : (staffSettings?.allowKioskFromStaff ?? false),
           allowGroupCheckin: allowGroupCheckin !== undefined ? allowGroupCheckin : (staffSettings?.allowGroupCheckin ?? false),
+          groupDisclaimerMode: groupDisclaimerMode !== undefined ? groupDisclaimerMode : (staffSettings?.groupDisclaimerMode ?? 'group'),
+          groupCheckinEnabled: groupCheckinEnabled !== undefined ? groupCheckinEnabled : (staffSettings?.groupCheckinEnabled ?? false),
           allowKioskWalkins: allowKioskWalkins !== undefined ? allowKioskWalkins : (staffSettings?.allowKioskWalkins ?? false),
           kioskWalkinConfig: kioskWalkinConfig !== undefined ? {
             enabledFields: Array.isArray(kioskWalkinConfig?.enabledFields) ? kioskWalkinConfig.enabledFields.filter((f: string) => ['firstName', 'lastName', 'email', 'company', 'title', 'participantType'].includes(f)) : ['firstName', 'lastName', 'email'],
@@ -8216,6 +8416,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allowWalkins: settings?.allowWalkins || false,
         allowKioskFromStaff: settings?.allowKioskFromStaff || false,
         allowGroupCheckin: settings?.allowGroupCheckin || false,
+        groupDisclaimerMode: settings?.groupDisclaimerMode || 'group',
+        groupCheckinEnabled: settings?.groupCheckinEnabled || false,
         allowKioskWalkins: settings?.allowKioskWalkins || false,
         kioskWalkinConfig: settings?.kioskWalkinConfig || null,
       });
@@ -8401,6 +8603,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           allowWalkins: event.tempStaffSettings?.allowWalkins || false,
           allowKioskFromStaff: event.tempStaffSettings?.allowKioskFromStaff || false,
           allowGroupCheckin: event.tempStaffSettings?.allowGroupCheckin || false,
+          groupDisclaimerMode: event.tempStaffSettings?.groupDisclaimerMode || 'group',
+          groupCheckinEnabled: event.tempStaffSettings?.groupCheckinEnabled || false,
         },
       });
     } catch (error) {
