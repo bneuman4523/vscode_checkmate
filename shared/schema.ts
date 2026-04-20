@@ -368,6 +368,12 @@ export const events = pgTable("events", {
   // Event-specific badge settings (JSON) - per-template font overrides, etc.
   badgeSettings: jsonb("badge_settings").$type<{
     fontOverrides?: Record<string, string>; // Map of templateId to font family
+    qrCodeConfigOverride?: {
+      embedType: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom';
+      fields: string[];
+      separator?: string;
+      includeLabel?: boolean;
+    } | null;
   }>(),
   // Temporary staff access settings
   tempStaffSettings: jsonb("temp_staff_settings").$type<{

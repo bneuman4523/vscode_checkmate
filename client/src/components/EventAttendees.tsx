@@ -155,6 +155,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     customerId?: string;
     syncSettings?: { selectedStatuses?: string[]; statusesConfigured?: boolean } | null;
     tempStaffSettings?: { enabled?: boolean; groupCheckinEnabled?: boolean } | null;
+    badgeSettings?: { qrCodeConfigOverride?: { embedType: string; fields: string[]; separator?: string; includeLabel?: boolean } | null } | null;
   }>({
     queryKey: ["/api/events", eventId],
     enabled: !!eventId,
@@ -411,7 +412,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
       includeQR: template.includeQR ?? true,
       qrPosition: template.qrPosition || "bottom-right",
       customQrPosition: (template as any).customQrPosition || undefined,
-      qrCodeConfig: (template.qrCodeConfig as any) || {
+      qrCodeConfig: (eventData?.badgeSettings as any)?.qrCodeConfigOverride || (template.qrCodeConfig as any) || {
         embedType: "externalId" as const,
         fields: ["externalId"],
         separator: "|",

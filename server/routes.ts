@@ -2146,6 +2146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         },
         hasPin,
         branding,
+        badgeSettings: event.badgeSettings || null,
       });
     } catch (error: any) {
       res.status(500).json({ error: "Failed to load kiosk launch info" });

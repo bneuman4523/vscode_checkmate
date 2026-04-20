@@ -55,7 +55,8 @@ import {
   Sun,
   Moon,
   ImageIcon,
-  Lock
+  Lock,
+  QrCode
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -162,6 +163,14 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [brandingInitialized, setBrandingInitialized] = useState(false);
   const brandingLogoInputRef = useRef<HTMLInputElement>(null);
   const brandingBannerInputRef = useRef<HTMLInputElement>(null);
+
+  // QR Code override state
+  const [qrOverrideEnabled, setQrOverrideEnabled] = useState(false);
+  const [qrEmbedType, setQrEmbedType] = useState<string>("externalId");
+  const [qrFields, setQrFields] = useState<string[]>([]);
+  const [qrSeparator, setQrSeparator] = useState("|");
+  const [qrIncludeLabel, setQrIncludeLabel] = useState(false);
+  const [qrInitialized, setQrInitialized] = useState(false);
 
   // Attendee statuses state
   const [localSelectedStatuses, setLocalSelectedStatuses] = useState<string[]>([]);
@@ -388,6 +397,24 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     }
   }, [event, brandingInitialized]);
 
+  // Initialize QR code override state from event data
+  useEffect(() => {
+    if (event && !qrInitialized) {
+      const badgeSettings = (event as any).badgeSettings as { qrCodeConfigOverride?: { embedType: string; fields: string[]; separator?: string; includeLabel?: boolean } | null } | null;
+      const override = badgeSettings?.qrCodeConfigOverride;
+      if (override) {
+        setQrOverrideEnabled(true);
+        setQrEmbedType(override.embedType || "externalId");
+        setQrFields(override.fields || []);
+        setQrSeparator(override.separator || "|");
+        setQrIncludeLabel(override.includeLabel || false);
+      } else {
+        setQrOverrideEnabled(false);
+      }
+      setQrInitialized(true);
+    }
+  }, [event, qrInitialized]);
+
   const addEventIntegrationMutation = useMutation({
     mutationFn: async (integrationId: string) => {
       const response = await apiRequest("POST", `/api/events/${eventId}/integrations`, {
@@ -560,6 +587,44 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     });
   };
 
+  const updateQrCodeOverrideMutation = useMutation({
+    mutationFn: async (qrCodeConfigOverride: { embedType: string; fields: string[]; separator?: string; includeLabel?: boolean } | null) => {
+      const existingBadgeSettings = (event as any)?.badgeSettings || {};
+      const response = await apiRequest("PATCH", `/api/events/${eventId}`, {
+        badgeSettings: { ...existingBadgeSettings, qrCodeConfigOverride },
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+      setQrInitialized(false);
+      toast({
+        title: "QR code settings updated",
+        description: "Event QR code override has been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update QR settings",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSaveQrCodeOverride = () => {
+    if (qrOverrideEnabled) {
+      updateQrCodeOverrideMutation.mutate({
+        embedType: qrEmbedType,
+        fields: qrFields,
+        separator: qrSeparator,
+        includeLabel: qrIncludeLabel,
+      });
+    } else {
+      updateQrCodeOverrideMutation.mutate(null);
+    }
+  };
+
   const handleBrandingImageUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     setter: (url: string | null) => void,
@@ -685,6 +750,7 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     { id: "workflow", label: "Check-in Workflow", icon: ListChecks, status: "configured" },
     { id: "notifications", label: "Notifications", icon: Bell, status: "configured" },
     { id: "branding", label: "Kiosk Branding", icon: Palette, status: brandingOverrideEnabled ? "configured" : "needs-setup" },
+    { id: "qrcode", label: "QR Code", icon: QrCode, status: qrOverrideEnabled ? "configured" : "needs-setup" },
     { id: "danger", label: "Danger Zone", icon: Trash2, status: "danger" },
   ];
 
@@ -1562,6 +1628,156 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
                     data-testid="button-disable-branding"
                   >
                     {updateBrandingOverrideMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>}
+
+        {activeSection === "qrcode" && <div>
+          <Card data-testid="card-qr-code-override">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <QrCode className="h-4 w-4" />
+                    QR Code Override
+                  </CardTitle>
+                  <CardDescription>
+                    Override the badge template's QR code content for this event
+                  </CardDescription>
+                </div>
+                <Switch
+                  checked={qrOverrideEnabled}
+                  onCheckedChange={setQrOverrideEnabled}
+                  data-testid="switch-qr-override"
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!qrOverrideEnabled && (
+                <p className="text-sm text-muted-foreground">
+                  Using badge template default.
+                </p>
+              )}
+
+              {qrOverrideEnabled && (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Embed Type</Label>
+                    <Select
+                      value={qrEmbedType}
+                      onValueChange={(value) => {
+                        setQrEmbedType(value);
+                        // Reset fields when switching to single-field types
+                        if (value === "externalId" || value === "externalProfileId") {
+                          setQrFields([]);
+                        }
+                      }}
+                    >
+                      <SelectTrigger data-testid="select-qr-embed-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="externalId">Registration Code</SelectItem>
+                        <SelectItem value="externalProfileId">External Profile ID</SelectItem>
+                        <SelectItem value="simple">Simple (with separator)</SelectItem>
+                        <SelectItem value="json">JSON Format</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {(qrEmbedType === "simple" || qrEmbedType === "json" || qrEmbedType === "custom") && (
+                    <>
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Fields to Include</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { value: "externalId", label: "Registration Code" },
+                            { value: "externalProfileId", label: "External Profile ID" },
+                            { value: "firstName", label: "First Name" },
+                            { value: "lastName", label: "Last Name" },
+                            { value: "email", label: "Email" },
+                            { value: "company", label: "Company" },
+                            { value: "title", label: "Job Title" },
+                            { value: "participantType", label: "Attendee Type" },
+                          ].map(field => (
+                            <div key={field.value} className="flex items-center gap-2">
+                              <Checkbox
+                                id={`qr-field-${field.value}`}
+                                checked={qrFields.includes(field.value)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setQrFields(prev => [...prev, field.value]);
+                                  } else {
+                                    setQrFields(prev => prev.filter(f => f !== field.value));
+                                  }
+                                }}
+                              />
+                              <label htmlFor={`qr-field-${field.value}`} className="text-sm">{field.label}</label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {(qrEmbedType === "simple" || qrEmbedType === "custom") && (
+                        <>
+                          <div className="space-y-2">
+                            <Label htmlFor="qrSeparator" className="text-sm font-medium">Separator</Label>
+                            <Input
+                              id="qrSeparator"
+                              value={qrSeparator}
+                              onChange={(e) => setQrSeparator(e.target.value)}
+                              placeholder="|"
+                              className="w-24"
+                              data-testid="input-qr-separator"
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-between rounded-lg border p-3">
+                            <div className="space-y-0.5">
+                              <Label className="text-sm font-medium">Include Labels</Label>
+                              <p className="text-xs text-muted-foreground">
+                                Prefix each value with its field name
+                              </p>
+                            </div>
+                            <Switch
+                              checked={qrIncludeLabel}
+                              onCheckedChange={setQrIncludeLabel}
+                              data-testid="switch-qr-include-label"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  <div className="flex justify-end pt-2 border-t">
+                    <Button
+                      onClick={handleSaveQrCodeOverride}
+                      disabled={updateQrCodeOverrideMutation.isPending}
+                      data-testid="button-save-qr-override"
+                    >
+                      {updateQrCodeOverrideMutation.isPending ? "Saving..." : "Save QR Settings"}
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {!qrOverrideEnabled && (event as any)?.badgeSettings?.qrCodeConfigOverride && (
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-amber-600">
+                    QR code override was previously enabled. Save to switch back to template defaults.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleSaveQrCodeOverride}
+                    disabled={updateQrCodeOverrideMutation.isPending}
+                    data-testid="button-disable-qr-override"
+                  >
+                    {updateQrCodeOverrideMutation.isPending ? "Saving..." : "Save"}
                   </Button>
                 </div>
               )}

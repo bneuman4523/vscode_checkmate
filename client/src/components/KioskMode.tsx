@@ -117,6 +117,7 @@ export default function KioskMode({
   const [logoTapCount, setLogoTapCount] = useState(0);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [branding, setBranding] = useState<KioskBrandingConfig | null>(null);
+  const [eventBadgeSettings, setEventBadgeSettings] = useState<any>(null);
   const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
   const [groupCheckedInMembers, setGroupCheckedInMembers] = useState<GroupMember[]>([]);
   const [groupPrintIndex, setGroupPrintIndex] = useState(0);
@@ -225,6 +226,9 @@ export default function KioskMode({
           const data = await res.json();
           if (data.branding) {
             setBranding(data.branding as KioskBrandingConfig);
+          }
+          if (data.badgeSettings) {
+            setEventBadgeSettings(data.badgeSettings);
           }
           return data.event as Event;
         },
@@ -964,7 +968,7 @@ export default function KioskMode({
       includeQR: template?.includeQR ?? true,
       qrPosition: template?.qrPosition || "bottom-right",
       customQrPosition: (template as any)?.customQrPosition || undefined,
-      qrCodeConfig: (template?.qrCodeConfig as any) || undefined,
+      qrCodeConfig: eventBadgeSettings?.qrCodeConfigOverride || (template?.qrCodeConfig as any) || undefined,
       mergeFields: (template?.mergeFields as any[]) || [],
       imageElements: (template as any)?.imageElements || [],
     };
