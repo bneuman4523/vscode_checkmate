@@ -6,13 +6,14 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-const isLocalDb = process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1');
+// Use Neon WebSocket driver only for Neon cloud URLs, standard pg for everything else
+const isNeonDb = process.env.DATABASE_URL.includes('neon.tech') || process.env.DATABASE_URL.includes('neon.cloud');
 
 let pool: any;
 let db: any;
 
-if (isLocalDb) {
-  // Local Docker Postgres — use standard pg driver
+if (!isNeonDb) {
+  // Standard Postgres — works for local, Docker, AWS RDS, Aurora, etc.
   const pg = await import('pg');
   const { drizzle } = await import('drizzle-orm/node-postgres');
   pool = new pg.default.Pool({

@@ -178,7 +178,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  if (process.env.REPL_ID) {
+  if (process.env.REPL_ID && process.env.REPL_ID.length > 0) {
     await setupAuth(app);
   } else {
     setupLocalAuth(app);
