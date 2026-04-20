@@ -220,7 +220,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
   ];
 
   const qrEmbedFields = [
-    { value: "externalId", label: "External ID" },
+    { value: "externalId", label: "Registration Code" },
+    { value: "externalProfileId", label: "External Profile ID" },
     { value: "firstName", label: "First Name" },
     { value: "lastName", label: "Last Name" },
     { value: "email", label: "Email" },
@@ -230,7 +231,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
   ];
 
   const qrEmbedTypes = [
-    { value: "externalId", label: "External ID Only", description: "Just the external ID for quick scanning" },
+    { value: "externalId", label: "Registration Code", description: "Registration code for quick scanning (default)" },
+    { value: "externalProfileId", label: "External Profile ID", description: "Certain's external profile ID for third-party integrations" },
     { value: "simple", label: "Simple (with separator)", description: "Multiple fields joined by separator" },
     { value: "json", label: "JSON Format", description: "Structured JSON with field names" },
     { value: "custom", label: "Custom", description: "Custom field mapping with labels" },

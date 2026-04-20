@@ -1403,6 +1403,7 @@ class SyncOrchestrator {
                         title: attendeeData.title || null,
                         participantType: attendeeData.participantType || 'General',
                         externalId: attendeeData.externalId,
+                        externalProfileId: attendeeData.externalProfileId || null,
                         registrationStatus: attendeeData.registrationStatus || 'Registered',
                         registrationStatusLabel: attendeeData.registrationStatusLabel || null,
                         orderCode: attendeeData.orderCode || null,
@@ -1875,6 +1876,7 @@ class SyncOrchestrator {
    */
   private transformCertainAttendee(rawData: any): {
     externalId: string;
+    externalProfileId?: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -1888,11 +1890,13 @@ class SyncOrchestrator {
     const profile = rawData.profile || {};
     const statusLabel = rawData.registrationStatusLabel || '';
     const externalId = String(rawData.registrationCode || rawData.pkRegId || '');
+    const externalProfileId = String(rawData.externalProfileId || profile.externalId || profile.externalProfileId || '');
     // orderCode links guests to primary attendee - matches primary's externalId
     // For primary attendees, orderCode equals their own externalId
     const orderCode = String(rawData.orderCode || externalId);
     return {
       externalId,
+      externalProfileId: externalProfileId || null,
       firstName: profile.firstName || rawData.firstName || '',
       lastName: profile.lastName || rawData.lastName || '',
       email: profile.email || rawData.email || '',

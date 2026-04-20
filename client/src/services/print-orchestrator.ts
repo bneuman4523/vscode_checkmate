@@ -198,6 +198,7 @@ class PrintOrchestrator {
       const getFieldValue = (fieldName: string): string => {
         switch (fieldName) {
           case 'externalId': return badgeData.externalId || badgeData.customFields?.externalId || '';
+          case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
           case 'firstName': return badgeData.firstName;
           case 'lastName': return badgeData.lastName;
           case 'email': return badgeData.customFields?.email || '';
@@ -218,6 +219,9 @@ class PrintOrchestrator {
       switch (qrCodeConfig.embedType) {
         case 'externalId':
           qrData = badgeData.externalId || badgeData.customFields?.externalId || `${badgeData.firstName}-${badgeData.lastName}-${Date.now()}`;
+          break;
+        case 'externalProfileId':
+          qrData = badgeData.customFields?.externalProfileId || badgeData.externalId || `${badgeData.firstName}-${badgeData.lastName}-${Date.now()}`;
           break;
         case 'simple':
           if (qrCodeConfig.includeLabel) {
@@ -745,6 +749,7 @@ class PrintOrchestrator {
       case 'title': return badgeData.title || '';
       case 'participantType': return badgeData.participantType;
       case 'externalId': return badgeData.externalId || '';
+      case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
       case 'orderCode': return (badgeData as any).orderCode || badgeData.customFields?.orderCode || '';
       default:
         if (fieldName.startsWith('customField_')) {

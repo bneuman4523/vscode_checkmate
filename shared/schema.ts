@@ -536,7 +536,8 @@ export const attendees = pgTable("attendees", {
   badgePrinted: boolean("badge_printed").notNull().default(false),
   badgePrintedAt: timestamp("badge_printed_at"),
   // External reference (not storing full external data)
-  externalId: text("external_id"), // Reference to external platform ID (registration code)
+  externalId: text("external_id"), // Registration code from external platform
+  externalProfileId: text("external_profile_id"), // External profile ID from Certain or other platforms
   // Order code for group registrations - matches primary attendee's externalId
   // Used for group check-in: scanning one badge prints all badges in the order
   orderCode: text("order_code"),
