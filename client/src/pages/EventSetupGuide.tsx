@@ -70,7 +70,7 @@ export default function EventSetupGuide() {
         <div>
           <h1 className="text-2xl font-bold text-[#0B2958] dark:text-white">Event Setup Guide</h1>
           <p className="text-muted-foreground mt-1">
-            Step-by-step instructions for getting an event ready to run in Checkmate.
+            Step-by-step instructions for getting an event ready to run in Greet.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="flex-shrink-0">

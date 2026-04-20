@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { SetupCompletenessCard } from "@/components/SetupCompletenessCard";
-import { 
-  Users, 
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Users,
   QrCode,
   Printer,
   Settings,
@@ -17,7 +18,8 @@ import {
   UserCheck,
   ArrowLeft,
   Layers,
-  FileBarChart
+  FileBarChart,
+  AlertTriangle,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from "recharts";
 import type { Customer, Event, Attendee } from "@shared/schema";
@@ -131,6 +133,25 @@ export default function EventDashboard() {
     refetchInterval: 30000,
   });
 
+  // Pre-filter attendees by the event's selected statuses (from sync config)
+  const selectedStatuses = apiEvent?.syncSettings?.selectedStatuses;
+
+  const includedAttendees = useMemo(() => {
+    if (!selectedStatuses || selectedStatuses.length === 0) {
+      return attendees;
+    }
+    return attendees.filter(a => {
+      const status = a.registrationStatusLabel || a.registrationStatus;
+      return selectedStatuses.includes(status);
+    });
+  }, [attendees, selectedStatuses]);
+
+  // Show a banner when the event has synced attendees but no status config
+  const hasSyncedAttendees = attendees.length > 0 && apiEvent?.integrationId;
+  const statusesConfigured = apiEvent?.syncSettings?.statusesConfigured ||
+    (selectedStatuses && selectedStatuses.length > 0);
+  const showStatusConfigBanner = hasSyncedAttendees && !statusesConfigured;
+
   const eventFallback = eventId && customerId ? getEventFallback(eventId, customerId) : null;
   const customerFallback = customerId ? getCustomerFallback(customerId) : null;
   const customer = apiCustomer || selectedCustomer || customerFallback;
@@ -166,11 +187,11 @@ export default function EventDashboard() {
     }
   };
 
-  const checkedInCount = attendees.filter(a => a.checkedIn).length;
-  const notCheckedIn = attendees.length - checkedInCount;
-  const checkinRate = attendees.length > 0 ? Math.round((checkedInCount / attendees.length) * 100) : 0;
-  const badgesPrinted = attendees.filter(a => a.badgePrinted).length;
-  const badgesNotPrinted = attendees.length - badgesPrinted;
+  const checkedInCount = includedAttendees.filter(a => a.checkedIn).length;
+  const notCheckedIn = includedAttendees.length - checkedInCount;
+  const checkinRate = includedAttendees.length > 0 ? Math.round((checkedInCount / includedAttendees.length) * 100) : 0;
+  const badgesPrinted = includedAttendees.filter(a => a.badgePrinted).length;
+  const badgesNotPrinted = includedAttendees.length - badgesPrinted;
 
   const checkinChartData = useMemo(() => [
     { name: "Checked In", value: checkedInCount, color: "hsl(142, 71%, 45%)" },
@@ -184,7 +205,7 @@ export default function EventDashboard() {
 
   const participantTypeData = useMemo(() => {
     const typeMap = new Map<string, number>();
-    attendees.forEach(a => {
+    includedAttendees.forEach(a => {
       const type = a.participantType || "Unknown";
       typeMap.set(type, (typeMap.get(type) || 0) + 1);
     });
@@ -198,7 +219,7 @@ export default function EventDashboard() {
       .map(([name, value], i) => ({
         name, value, color: typeColors[i % typeColors.length]
       }));
-  }, [attendees]);
+  }, [includedAttendees]);
 
   if ((customerLoading || eventLoading) && !selectedEvent) {
     return (
@@ -255,6 +276,21 @@ export default function EventDashboard() {
               window.dispatchEvent(new CustomEvent("open-assistant"));
             }}
           />
+          {showStatusConfigBanner && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                Configure attendee statuses in{" "}
+                <button
+                  className="underline font-medium hover:text-foreground"
+                  onClick={() => handleTabChange("data-sync")}
+                >
+                  Data Sync settings
+                </button>{" "}
+                to see accurate counts.
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
@@ -262,7 +298,7 @@ export default function EventDashboard() {
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold" data-testid="text-total-attendees">{attendees.length}</div>
+                <div className="text-2xl font-bold" data-testid="text-total-attendees">{includedAttendees.length}</div>
               </CardContent>
             </Card>
             <Card>
@@ -282,7 +318,7 @@ export default function EventDashboard() {
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-orange-500" data-testid="text-yet-to-checkin">{notCheckedIn}</div>
-                <p className="text-xs text-muted-foreground mt-1">{attendees.length > 0 ? 100 - checkinRate : 0}% remaining</p>
+                <p className="text-xs text-muted-foreground mt-1">{includedAttendees.length > 0 ? 100 - checkinRate : 0}% remaining</p>
               </CardContent>
             </Card>
             <Card>
@@ -295,7 +331,7 @@ export default function EventDashboard() {
                   {badgesPrinted}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {attendees.length > 0 ? Math.round((badgesPrinted / attendees.length) * 100) : 0}% of total
+                  {includedAttendees.length > 0 ? Math.round((badgesPrinted / includedAttendees.length) * 100) : 0}% of total
                 </p>
               </CardContent>
             </Card>
@@ -307,7 +343,7 @@ export default function EventDashboard() {
                 <CardTitle className="text-sm sm:text-base">Check-in Progress</CardTitle>
               </CardHeader>
               <CardContent>
-                {attendees.length === 0 ? (
+                {includedAttendees.length === 0 ? (
                   <div className="flex items-center justify-center h-[200px] text-sm text-muted-foreground">
                     No attendees yet
                   </div>
@@ -362,7 +398,7 @@ export default function EventDashboard() {
                 <CardTitle className="text-sm sm:text-base">Badge Printing</CardTitle>
               </CardHeader>
               <CardContent>
-                {attendees.length === 0 ? (
+                {includedAttendees.length === 0 ? (
                   <div className="flex items-center justify-center h-[200px] text-sm text-muted-foreground">
                     No attendees yet
                   </div>
@@ -475,11 +511,11 @@ export default function EventDashboard() {
                 <CardTitle className="text-sm sm:text-base">Recent Check-ins</CardTitle>
               </CardHeader>
               <CardContent>
-                {attendees.filter(a => a.checkedIn).length === 0 ? (
+                {includedAttendees.filter(a => a.checkedIn).length === 0 ? (
                   <p className="text-sm text-muted-foreground">No check-ins yet</p>
                 ) : (
                   <div className="space-y-3">
-                    {attendees
+                    {includedAttendees
                       .filter(a => a.checkedIn)
                       .sort((a, b) => {
                         const aTime = a.checkedInAt ? new Date(a.checkedInAt).getTime() : 0;

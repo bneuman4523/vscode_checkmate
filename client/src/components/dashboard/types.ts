@@ -94,6 +94,7 @@ export interface Attendee {
   badgePrinted: boolean;
   badgePrintedAt?: string;
   externalId?: string;
+  orderCode?: string;
 }
 
 /**

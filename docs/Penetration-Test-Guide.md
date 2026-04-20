@@ -1,8 +1,8 @@
-# Penetration Test Guide — Checkmate
+# Penetration Test Guide — Greet
 
 ## Overview
 
-This document outlines the recommended approach for conducting a penetration test against the Checkmate platform. It covers access levels, scoping, and preparation steps.
+This document outlines the recommended approach for conducting a penetration test against the Greet platform. It covers access levels, scoping, and preparation steps.
 
 ---
 
@@ -37,7 +37,7 @@ Give the pen test team a regular user account (not admin, not super admin). This
 
 ### In Scope
 
-- Published Checkmate application URL and all endpoints under it
+- Published Greet application URL and all endpoints under it
 - All API endpoints (`/api/*`)
 - Authentication flows (Replit Auth, email/password, SMS OTP, email OTP)
 - Staff/kiosk check-in interfaces

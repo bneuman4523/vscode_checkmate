@@ -92,7 +92,7 @@ export default function AccountSetupGuide() {
           </div>
           <h1 className="text-2xl font-bold text-[#0B2958] dark:text-white">Account & Integration Setup Guide</h1>
           <p className="text-muted-foreground mt-1">
-            Pro services reference for onboarding new client accounts in Checkmate.
+            Pro services reference for onboarding new client accounts in Greet.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="flex-shrink-0">
@@ -165,7 +165,7 @@ export default function AccountSetupGuide() {
           <ul className="list-disc pl-5 space-y-1">
             <li>Only events tagged with <code className="text-xs bg-muted px-1 py-0.5 rounded">checkmate</code> (case-insensitive) in the Certain platform will be synced</li>
             <li>Events that lose the tag are automatically pruned along with all associated data</li>
-            <li>Field mappings define how external attendee data maps to Checkmate fields — configure these during integration setup</li>
+            <li>Field mappings define how external attendee data maps to Greet fields — configure these during integration setup</li>
           </ul>
 
           <h4 className="font-semibold text-foreground mt-2">Testing the Connection</h4>
@@ -185,11 +185,11 @@ export default function AccountSetupGuide() {
           icon={<RefreshCw className="h-4 w-4 text-[#0B2958] dark:text-white" />}
         >
           <p>
-            Field mappings tell Checkmate how to translate data from the external platform into attendee records.
+            Field mappings tell Greet how to translate data from the external platform into attendee records.
           </p>
           <ul className="list-disc pl-5 space-y-1">
             <li><strong>Source path</strong> — the JSON path in the API response (supports dot notation and array brackets)</li>
-            <li><strong>Target field</strong> — the Checkmate attendee field to map to</li>
+            <li><strong>Target field</strong> — the Greet attendee field to map to</li>
             <li><strong>Transform</strong> — optional data transform: lowercase, uppercase, boolean, date, number, or default value</li>
           </ul>
           <p>

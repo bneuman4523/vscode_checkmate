@@ -1,4 +1,4 @@
-# PrintNode Setup Guide for Checkmate
+# PrintNode Setup Guide for Greet
 
 **Purpose:** Enable cloud-to-local printing for mobile devices and tablets at event venues.
 
@@ -6,10 +6,10 @@
 
 ## Why PrintNode?
 
-Since Checkmate runs in the cloud, it cannot directly access printers on your local network. PrintNode bridges this gap by:
+Since Greet runs in the cloud, it cannot directly access printers on your local network. PrintNode bridges this gap by:
 
 1. Running a small client application on a computer at your venue
-2. Receiving print jobs from Checkmate via the cloud
+2. Receiving print jobs from Greet via the cloud
 3. Sending those jobs to your locally connected printer
 
 **Result:** Staff using iPads, Android tablets, or any device can print badges to your venue printer.
@@ -39,13 +39,13 @@ Since Checkmate runs in the cloud, it cannot directly access printers on your lo
 1. In PrintNode dashboard, click **API Keys** in the left menu
 2. Click **Generate API Key**
 3. Copy the API key (long string of characters)
-4. Save it securely - you'll need it for Checkmate
+4. Save it securely - you'll need it for Greet
 
 ---
 
-## Step 3: Add API Key to Checkmate
+## Step 3: Add API Key to Greet
 
-> **For Checkmate Administrators Only**
+> **For Greet Administrators Only**
 
 1. Access your Replit project
 2. Go to **Secrets** (lock icon in sidebar)
@@ -112,9 +112,9 @@ Since Checkmate runs in the cloud, it cannot directly access printers on your lo
 
 ---
 
-## Step 7: Configure PrintNode in Checkmate Staff Dashboard
+## Step 7: Configure PrintNode in Greet Staff Dashboard
 
-1. Open Checkmate staff dashboard on your device (iPad, tablet, laptop)
+1. Open Greet staff dashboard on your device (iPad, tablet, laptop)
 2. Tap the **Printer** button in the header
 3. Select the **PrintNode** tab
 4. You should see your printer in the dropdown
@@ -125,7 +125,7 @@ Since Checkmate runs in the cloud, it cannot directly access printers on your lo
 
 ## Troubleshooting
 
-### Printer Not Appearing in Checkmate
+### Printer Not Appearing in Greet
 
 | Issue | Solution |
 |-------|----------|
@@ -139,7 +139,7 @@ Since Checkmate runs in the cloud, it cannot directly access printers on your lo
 | Issue | Solution |
 |-------|----------|
 | Queue stuck | Check PrintNode dashboard for errors |
-| Wrong printer selected | Verify correct printer in Checkmate settings |
+| Wrong printer selected | Verify correct printer in Greet settings |
 | Paper/ribbon issue | Check printer for hardware problems |
 | Client not running | Restart PrintNode client on venue computer |
 
@@ -148,7 +148,7 @@ Since Checkmate runs in the cloud, it cannot directly access printers on your lo
 1. In PrintNode dashboard, go to **Printers**
 2. Click on your printer
 3. Click **Print Test Page**
-4. If test page prints, issue is with Checkmate config
+4. If test page prints, issue is with Greet config
 5. If test page fails, issue is with local printer/client
 
 ---
@@ -161,7 +161,7 @@ Before event starts:
 - [ ] PrintNode client is running (check system tray)
 - [ ] Printer is powered on and has supplies
 - [ ] Printer shows "Online" in PrintNode dashboard
-- [ ] Test print works from Checkmate staff dashboard
+- [ ] Test print works from Greet staff dashboard
 
 ---
 
@@ -193,7 +193,7 @@ For most events, the **Free** tier is sufficient for testing and small events.
 
 - **PrintNode Documentation:** [https://www.printnode.com/docs](https://www.printnode.com/docs)
 - **PrintNode Support:** support@printnode.com
-- **Checkmate Issues:** Contact your Checkmate administrator
+- **Greet Issues:** Contact your Greet administrator
 
 ---
 
@@ -203,10 +203,10 @@ For most events, the **Free** tier is sufficient for testing and small events.
 |--------|-------|
 | Create PrintNode account | printnode.com |
 | Get API key | PrintNode Dashboard > API Keys |
-| Add API key to Checkmate | Replit > Secrets > PRINTNODE_API_KEY |
+| Add API key to Greet | Replit > Secrets > PRINTNODE_API_KEY |
 | Download client | printnode.com/download |
 | View printer status | PrintNode Dashboard > Printers |
-| Configure in Checkmate | Staff Dashboard > Printer > PrintNode tab |
+| Configure in Greet | Staff Dashboard > Printer > PrintNode tab |
 
 ---
 

@@ -230,7 +230,7 @@ export default function BadgeRenderSurface({
         
         const qrCodeUrl = await QRCode.toDataURL(qrData, {
           width: qrSize,
-          margin: 1,
+          margin: 2,
           errorCorrectionLevel: 'H', // High error correction for better scanning
           color: {
             dark: '#000000',
@@ -290,7 +290,7 @@ export default function BadgeRenderSurface({
           default: qrData = externalId || `${firstName}-${lastName}`;
         }
         const qrSize = printMode ? 900 : 300;
-        const url = await QRCode.toDataURL(qrData, { width: qrSize, margin: 1, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } });
+        const url = await QRCode.toDataURL(qrData, { width: qrSize, margin: 2, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } });
         backSideQrCodeRef.current = url;
       } catch (error) {
         console.error('Back-side QR code generation failed:', error);
@@ -401,7 +401,7 @@ export default function BadgeRenderSurface({
           ctx.restore();
 
           if (templateConfig.includeQR && qrCodeRef.current) {
-            const qrSize = Math.min(widthPx, panelHeightPx) * 0.2;
+            const qrSize = Math.min(widthPx, panelHeightPx) * 0.3;
             let qrLeft = 0, qrTop = 0;
             switch (templateConfig.qrPosition) {
               case 'top-left': qrLeft = 10 * dpiScale; qrTop = 10 * dpiScale; break;
@@ -523,7 +523,7 @@ export default function BadgeRenderSurface({
           ctx.restore();
 
           if (templateConfig.backSideIncludeQR && backSideQrCodeRef.current) {
-            const qrSize = Math.min(widthPx, panelHeightPx) * 0.2;
+            const qrSize = Math.min(widthPx, panelHeightPx) * 0.3;
             const backQrPos = templateConfig.backSideQrPosition || 'bottom-right';
             let qrLeft = 0, qrTop = 0;
             switch (backQrPos) {
@@ -677,7 +677,7 @@ export default function BadgeRenderSurface({
 
       if (templateConfig.includeQR && qrCodeRef.current) {
         const frontPanelH = panelHeightPx;
-        const qrSize = Math.min(widthPx, frontPanelH) * 0.2;
+        const qrSize = Math.min(widthPx, frontPanelH) * 0.3;
         let qrLeft = 0, qrTop = 0;
 
         switch (templateConfig.qrPosition) {

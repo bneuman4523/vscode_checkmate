@@ -249,7 +249,7 @@ const MemoizedBadgeBack = memo(function BadgeBack({
       <div className="px-4 pb-3">
         <div className="flex items-center justify-center gap-2 opacity-30">
           <div className="h-px flex-1" style={{ backgroundColor: textColor }} />
-          <span className="text-[8px] uppercase tracking-widest">Checkmate</span>
+          <span className="text-[8px] uppercase tracking-widest">Greet</span>
           <div className="h-px flex-1" style={{ backgroundColor: textColor }} />
         </div>
       </div>

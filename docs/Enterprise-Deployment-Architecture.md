@@ -1,4 +1,4 @@
-# Checkmate Enterprise Deployment Architecture
+# Greet Enterprise Deployment Architecture
 
 **Version:** 1.0  
 **Date:** February 2026  
@@ -29,7 +29,7 @@
 
 ### 1.1 Purpose
 
-Checkmate is a multi-tenant SaaS platform for event registration and check-in, designed to replace legacy native mobile applications. The system handles real-time attendee check-in, badge printing, and bidirectional synchronization with external event management platforms.
+Greet is a multi-tenant SaaS platform for event registration and check-in, designed to replace legacy native mobile applications. The system handles real-time attendee check-in, badge printing, and bidirectional synchronization with external event management platforms.
 
 ### 1.2 Key Characteristics
 

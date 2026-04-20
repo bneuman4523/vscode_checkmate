@@ -21,37 +21,6 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
-export function getSession() {
-  const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
-  const pgStore = connectPg(session);
-  const sessionStore = new pgStore({
-    conString: process.env.DATABASE_URL,
-    createTableIfMissing: true,
-    ttl: sessionTtl,
-    tableName: "auth_sessions",
-  });
-
-  // Cookie settings:
-  // - Production: secure+lax for OIDC redirect compatibility
-  // - Replit iframe dev: secure+none for cross-origin cookies
-  // - Local dev (no REPL_ID): insecure+lax so cookies work over http://localhost
-  const isProduction = process.env.NODE_ENV === "production";
-  const isReplit = !!process.env.REPL_ID;
-
-  return session({
-    secret: process.env.SESSION_SECRET!,
-    store: sessionStore,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: isProduction || isReplit,
-      sameSite: isProduction ? "lax" : (isReplit ? "none" : "lax"),
-      maxAge: sessionTtl,
-    },
-  });
-}
-
 export function setupLocalAuth(app: Express) {
   app.set("trust proxy", 1);
   app.use(getSession());
@@ -63,6 +32,39 @@ export function setupLocalAuth(app: Express) {
     cb(null, safeUser);
   });
   passport.deserializeUser((user: Express.User, cb) => cb(null, user));
+}
+
+export function getSession() {
+  const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
+  const pgStore = connectPg(session);
+  const sessionStore = new pgStore({
+    conString: process.env.DATABASE_URL,
+    createTableIfMissing: true,
+    ttl: sessionTtl,
+    tableName: "auth_sessions",
+  });
+  
+  // Determine cookie settings based on environment:
+  // Cookie settings by environment:
+  // - development/staging: HTTP localhost, no HTTPS required
+  // - production: HTTPS required
+  // - Replit (other): cross-origin iframe needs sameSite="none" + secure=true
+  const env = process.env.NODE_ENV || "development";
+  const isLocal = env === "development" || env === "staging";
+  const isProduction = env === "production";
+
+  return session({
+    secret: process.env.SESSION_SECRET!,
+    store: sessionStore,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: isLocal ? false : true,
+      sameSite: isLocal ? "lax" : (isProduction ? "lax" : "none"),
+      maxAge: sessionTtl,
+    },
+  });
 }
 
 function updateUserSession(

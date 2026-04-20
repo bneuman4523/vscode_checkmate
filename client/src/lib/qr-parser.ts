@@ -13,6 +13,7 @@ type FoundResult = Extract<QrMatchResult, { type: "found" }>;
 
 const KNOWN_ID_FIELDS = [
   "externalId",
+  "externalProfileId",
   "code",
   "registrationCode",
   "regCode",
@@ -49,7 +50,10 @@ function findFieldValue(obj: Record<string, unknown>, candidates: string[]): str
 
 function tryMatchById(attendees: Attendee[], value: string, suffix?: string): FoundResult | null {
   let found = attendees.find((a) => a.externalId === value);
-  if (found) return { type: "found", attendee: found, matchedBy: suffix ? `externalId (${suffix})` : "externalId" };
+  if (found) return { type: "found", attendee: found, matchedBy: suffix ? `Registration Code (${suffix})` : "Registration Code" };
+
+  found = attendees.find((a) => (a as any).externalProfileId === value);
+  if (found) return { type: "found", attendee: found, matchedBy: suffix ? `External Profile ID (${suffix})` : "External Profile ID" };
 
   found = attendees.find((a) => a.id === value);
   if (found) return { type: "found", attendee: found, matchedBy: suffix ? `id (${suffix})` : "id" };

@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
+import { useNavigation } from "@/contexts/NavigationContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -62,6 +63,7 @@ import {
   Activity,
   Loader2,
   RefreshCw,
+  Building2,
 } from "lucide-react";
 
 interface FeedbackEntry {
@@ -588,16 +590,22 @@ export default function FeedbackDashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user: authUser } = useAuth();
+  const { selectedCustomer } = useNavigation();
   const isSuperAdmin = authUser?.role === "super_admin";
+  const filterCustomerId = isSuperAdmin && selectedCustomer ? selectedCustomer.id : undefined;
 
   const queryParams = new URLSearchParams();
   queryParams.set("page", String(page));
   queryParams.set("limit", "25");
   if (typeFilter !== "all") queryParams.set("type", typeFilter);
   if (statusFilter !== "all") queryParams.set("status", statusFilter);
+  if (filterCustomerId) queryParams.set("customerId", filterCustomerId);
+
+  const statsParams = new URLSearchParams();
+  if (filterCustomerId) statsParams.set("customerId", filterCustomerId);
 
   const { data: statsData } = useQuery<FeedbackStats>({
-    queryKey: ["/api/admin/feedback/stats"],
+    queryKey: [`/api/admin/feedback/stats${statsParams.toString() ? `?${statsParams.toString()}` : ""}`],
   });
 
   const { data: feedbackData, isLoading } = useQuery<{
@@ -656,12 +664,21 @@ export default function FeedbackDashboard() {
       <div className="flex items-center gap-3">
         <MessageSquare className="h-7 w-7 text-[#0B2958]" />
         <div>
-          <h1 className="text-2xl font-bold">Beta Feedback</h1>
+          <h1 className="text-2xl font-bold">Feedback</h1>
           <p className="text-sm text-muted-foreground">
             Review feedback, usage analytics, and AI-powered insights
           </p>
         </div>
       </div>
+
+      {isSuperAdmin && filterCustomerId && selectedCustomer && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-[#0B2958]/5 border border-[#0B2958]/15 rounded-lg">
+          <Building2 className="h-4 w-4 text-[#0B2958]" />
+          <span className="text-sm font-medium text-[#0B2958]">
+            Viewing feedback for {selectedCustomer.name}
+          </span>
+        </div>
+      )}
 
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
         <Card>

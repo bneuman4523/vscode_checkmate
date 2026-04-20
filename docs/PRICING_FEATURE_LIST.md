@@ -1,4 +1,4 @@
-# Checkmate — Feature List for Pricing Packages
+# Greet — Feature List for Pricing Packages
 
 *Last updated: March 2026*
 
@@ -144,7 +144,7 @@
 ### Future
 | Feature | Target | Description |
 |---------|--------|-------------|
-| Checkmate AI Assistant | Q3 2026 | Platform-wide conversational assistant for natural language event configuration and operations |
+| Greet AI Assistant | Q3 2026 | Platform-wide conversational assistant for natural language event configuration and operations |
 | Advanced sync engine | Q3 2026 | Delta sync, conflict resolution, dead letter queue, and sync health dashboard |
 | SOC 2 Type II compliance | Q3 2026 | Enterprise security certification and audit trail |
 | GDPR/CCPA data privacy | Q3 2026 | Right to deletion, data export, and consent tracking |

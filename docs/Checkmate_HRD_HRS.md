@@ -1,6 +1,6 @@
 # Hardware Requirements Specification (HRS) & High-Level Requirements Document (HRD)
 
-**Project:** Checkmate (Event Check-In & Badge Printing System)  
+**Project:** Greet (Event Check-In & Badge Printing System)  
 **Version:** 1.0.0  
 **Date:** January 15, 2026
 
@@ -8,7 +8,7 @@
 
 ## 1. System Overview
 
-Checkmate is an enterprise-grade event registration and check-in platform designed to replace legacy native mobile applications. The system provides seamless event management with offline-first capabilities, QR code scanning, badge printing, and robust API integrations with external ticketing platforms (Certain, etc.).
+Greet is an enterprise-grade event registration and check-in platform designed to replace legacy native mobile applications. The system provides seamless event management with offline-first capabilities, QR code scanning, badge printing, and robust API integrations with external ticketing platforms (Certain, etc.).
 
 ### Hosting Model
 
@@ -16,7 +16,7 @@ Checkmate is an enterprise-grade event registration and check-in platform design
 **Infrastructure Provider:** Google Cloud Platform (GCP)  
 **Data Center Location:** United States
 
-Checkmate operates as a fully managed cloud application on Replit's deployment infrastructure. **No on-premise hardware is required.** All compute, storage, networking, and scaling are handled by the platform.
+Greet operates as a fully managed cloud application on Replit's deployment infrastructure. **No on-premise hardware is required.** All compute, storage, networking, and scaling are handled by the platform.
 
 ### High-Level Topology
 
@@ -60,7 +60,7 @@ Checkmate operates as a fully managed cloud application on Replit's deployment i
 
 ### A. Application Nodes (Managed by Replit)
 
-Checkmate uses **Autoscale Deployment** for optimal cost and performance.
+Greet uses **Autoscale Deployment** for optimal cost and performance.
 
 | Component | Specification | Notes |
 |-----------|---------------|-------|
@@ -79,7 +79,7 @@ Checkmate uses **Autoscale Deployment** for optimal cost and performance.
 
 ### B. Database Server (Neon PostgreSQL)
 
-Checkmate uses Replit's managed PostgreSQL 16 database powered by Neon.
+Greet uses Replit's managed PostgreSQL 16 database powered by Neon.
 
 | Component | Specification | Notes |
 |-----------|---------------|-------|
@@ -209,7 +209,7 @@ To use a custom domain (e.g., `checkin.yourcompany.com`):
 
 ### C. Authentication Architecture
 
-Checkmate implements a dual authentication system:
+Greet implements a dual authentication system:
 
 **1. Replit Auth (Primary - Admin Users)**
 - OpenID Connect (OIDC) via Replit identity service
@@ -249,7 +249,7 @@ Checkmate implements a dual authentication system:
 
 ### G. PCI-DSS Considerations
 
-Checkmate does **not** process payment card data directly. If payment integration is added:
+Greet does **not** process payment card data directly. If payment integration is added:
 - Use Stripe Elements (client-side tokenization)
 - Only store `stripe_customer_id` and `payment_method_token`
 - Maintains **SAQ A** compliance
@@ -297,7 +297,7 @@ Checkmate does **not** process payment card data directly. If payment integratio
 
 ## 7. Print System Requirements
 
-Checkmate supports multiple badge printing methods:
+Greet supports multiple badge printing methods:
 
 ### A. Print Methods by Platform
 
@@ -321,7 +321,7 @@ Checkmate supports multiple badge printing methods:
 
 1. Printer must be on same network as device
 2. Port 9100 must be open (outbound from device to printer)
-3. Configure printer IP address in Checkmate settings
+3. Configure printer IP address in Greet settings
 
 ---
 

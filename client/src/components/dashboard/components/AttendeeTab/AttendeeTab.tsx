@@ -4,16 +4,16 @@ import { Search, ScanLine, XCircle, UserPlus } from "lucide-react";
 import StaffQRScanner from "@/components/StaffQRScanner";
 import { AttendeeList } from "./AttendeeList";
 import type { Attendee } from "../../types";
-import type { RegistrationStatus } from "@shared/schema";
-import { registrationStatuses } from "@shared/schema";
 
 interface AttendeeTabProps {
   attendees: Attendee[];
   filteredAttendees: Attendee[];
   searchTerm: string;
   onSearchChange: (term: string) => void;
-  statusFilter: RegistrationStatus[];
-  onStatusFilterChange: (filter: RegistrationStatus[]) => void;
+  statusFilter: string[];
+  onStatusFilterChange: (filter: string[]) => void;
+  /** Dynamic list of statuses for the filter buttons (from event selectedStatuses or fallback) */
+  availableStatuses: string[];
   scanMode: boolean;
   onToggleScanMode: () => void;
   isLoading: boolean;
@@ -45,6 +45,7 @@ export function AttendeeTab({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
+  availableStatuses,
   scanMode,
   onToggleScanMode,
   isLoading,
@@ -61,7 +62,7 @@ export function AttendeeTab({
   onQRScanFound,
   onAddWalkin,
 }: AttendeeTabProps) {
-  const toggleStatus = (status: RegistrationStatus) => {
+  const toggleStatus = (status: string) => {
     onStatusFilterChange(
       statusFilter.includes(status)
         ? statusFilter.filter(s => s !== status)
@@ -118,8 +119,8 @@ export function AttendeeTab({
       {!scanMode && (
         <div className="flex items-center gap-1.5 flex-wrap">
           <span className="text-xs text-muted-foreground">Status:</span>
-          {registrationStatuses.map((status) => {
-            const count = attendees.filter(a => a.registrationStatus === status).length;
+          {availableStatuses.map((status) => {
+            const count = attendees.filter(a => (a.registrationStatusLabel || a.registrationStatus) === status).length;
             const isActive = statusFilter.includes(status);
             return (
               <Button

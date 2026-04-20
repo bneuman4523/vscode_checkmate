@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +24,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Building2, Plus, MoreVertical, ChevronRight, Pencil, Power, PowerOff, Trash2 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Building2, Plus, MoreVertical, ChevronRight, Pencil, Power, PowerOff, Trash2, Crown, Shield } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,12 +51,31 @@ interface Customer {
   contactEmail: string;
   apiBaseUrl?: string | null;
   status: "active" | "inactive";
+  licenseType?: string;
+  licensePlan?: string | null;
+  prepaidAttendees?: number | null;
   createdAt: Date;
 }
 
+const LICENSE_PLANS = {
+  starter: { name: "Starter", attendees: 1000 },
+  professional: { name: "Professional", attendees: 5000 },
+  enterprise: { name: "Enterprise", attendees: 20000 },
+  strategic: { name: "Strategic", attendees: 45000 },
+};
+
 export default function CustomerManagement() {
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({ name: "", email: "", apiBaseUrl: "", notes: "" });
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    apiBaseUrl: "",
+    licenseType: "basic" as "basic" | "premium",
+    licensePlan: "" as string,
+    licenseNotes: "",
+    licenseStartDate: new Date().toISOString().split("T")[0],
+    licenseEndDate: "",
+  });
   const [, setLocation] = useLocation();
   const { setSelectedCustomer } = useNavigation();
   const { toast } = useToast();
@@ -66,7 +93,11 @@ export default function CustomerManagement() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: Record<string, string>) => {
+    mutationFn: async (data: typeof formData) => {
+      const plan = data.licenseType === "premium" && data.licensePlan
+        ? LICENSE_PLANS[data.licensePlan as keyof typeof LICENSE_PLANS]
+        : null;
+
       const response = await apiRequest(
         "POST",
         "/api/customers",
@@ -75,14 +106,20 @@ export default function CustomerManagement() {
           contactEmail: data.email,
           apiBaseUrl: data.apiBaseUrl || null,
           status: "active",
+          licenseType: data.licenseType,
+          licensePlan: data.licenseType === "premium" ? data.licensePlan : null,
+          prepaidAttendees: plan ? plan.attendees : null,
+          licenseStartDate: data.licenseStartDate || null,
+          licenseEndDate: data.licenseEndDate || null,
+          licenseNotes: data.licenseNotes || null,
         }
       );
       return response.json();
     },
     onSuccess: (newCustomer: Customer) => {
       queryClient.invalidateQueries({ queryKey: ["/api/customers"] });
-      toast({ title: "Customer created", description: `${newCustomer.name} has been created successfully.` });
-      setFormData({ name: "", email: "", apiBaseUrl: "", notes: "" });
+      toast({ title: "Customer created", description: `${newCustomer.name} has been created successfully with ${formData.licenseType} license.` });
+      setFormData({ name: "", email: "", apiBaseUrl: "", licenseType: "basic", licensePlan: "", licenseNotes: "", licenseStartDate: new Date().toISOString().split("T")[0], licenseEndDate: "" });
       setDialogOpen(false);
     },
     onError: (error: Error) => {
@@ -143,6 +180,18 @@ export default function CustomerManagement() {
       toast({ variant: "destructive", title: "Error", description: "Please fill in required fields" });
       return;
     }
+    if (formData.licenseType === "premium" && !formData.licensePlan) {
+      toast({ variant: "destructive", title: "Error", description: "Please select a licensing plan for premium accounts" });
+      return;
+    }
+    if (!formData.licenseStartDate) {
+      toast({ variant: "destructive", title: "Error", description: "Please set the contract start date" });
+      return;
+    }
+    if (!formData.licenseEndDate) {
+      toast({ variant: "destructive", title: "Error", description: "Please set the contract end date" });
+      return;
+    }
     createMutation.mutate(formData);
   };
 
@@ -187,6 +236,28 @@ export default function CustomerManagement() {
     deleteMutation.mutate(selectedCustomer.id);
   };
 
+  const getLicenseBadge = (customer: Customer) => {
+    if (customer.licenseType === "premium") {
+      const planName = customer.licensePlan
+        ? LICENSE_PLANS[customer.licensePlan as keyof typeof LICENSE_PLANS]?.name || customer.licensePlan
+        : "Premium";
+      return (
+        <Badge variant="default" className="bg-amber-500 hover:bg-amber-600 text-white gap-1">
+          <Crown className="h-3 w-3" />
+          {planName}
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="secondary" className="gap-1">
+        <Shield className="h-3 w-3" />
+        Basic
+      </Badge>
+    );
+  };
+
+  const selectedPlan = formData.licensePlan as keyof typeof LICENSE_PLANS;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -196,21 +267,24 @@ export default function CustomerManagement() {
             Manage customer organizations and their access
           </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) setFormData({ name: "", email: "", apiBaseUrl: "", licenseType: "basic", licensePlan: "", licenseNotes: "", licenseEndDate: "" });
+        }}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-customer">
               <Plus className="h-4 w-4 mr-2" />
               Add Customer
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Account</DialogTitle>
               <DialogDescription>
-                Set up a new customer organization with admin access
+                Set up a new customer organization with admin access and licensing
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 py-4">
+            <div className="space-y-5 py-4">
               <div className="space-y-2">
                 <Label htmlFor="customer-name">Organization Name</Label>
                 <Input
@@ -245,6 +319,134 @@ export default function CustomerManagement() {
                 <p className="text-xs text-muted-foreground">
                   Default base URL for this customer's API integrations
                 </p>
+              </div>
+
+              <div className="border-t pt-5">
+                <h3 className="text-sm font-semibold mb-3">License Configuration</h3>
+
+                <div className="space-y-3">
+                  <Label>License Type</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, licenseType: "basic", licensePlan: "", licenseNotes: "", licenseEndDate: "" })}
+                      className={`relative flex flex-col items-start gap-1 rounded-lg border-2 p-4 transition-colors ${
+                        formData.licenseType === "basic"
+                          ? "border-primary bg-primary/5"
+                          : "border-muted hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium text-sm">Basic</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground text-left">Standard features for straightforward events</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, licenseType: "premium" })}
+                      className={`relative flex flex-col items-start gap-1 rounded-lg border-2 p-4 transition-colors ${
+                        formData.licenseType === "premium"
+                          ? "border-amber-500 bg-amber-500/5"
+                          : "border-muted hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Crown className="h-4 w-4 text-amber-500" />
+                        <span className="font-medium text-sm">Premium</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground text-left">Full feature set with prepaid attendees</span>
+                    </button>
+                  </div>
+                </div>
+
+                {formData.licenseType === "basic" && (
+                  <div className="mt-4 rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+                    Standard features will be enabled. Premium features can be trialed individually via Mission Control.
+                  </div>
+                )}
+
+                {formData.licenseType === "premium" && (
+                  <div className="mt-4 space-y-4">
+                    <div className="space-y-2">
+                      <Label>Licensing Plan <span className="text-destructive">*</span></Label>
+                      <Select
+                        value={formData.licensePlan}
+                        onValueChange={(value) => setFormData({ ...formData, licensePlan: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a plan" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="starter">
+                            Starter
+                          </SelectItem>
+                          <SelectItem value="professional">
+                            Professional
+                          </SelectItem>
+                          <SelectItem value="enterprise">
+                            Enterprise
+                          </SelectItem>
+                          <SelectItem value="strategic">
+                            Strategic
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {selectedPlan && LICENSE_PLANS[selectedPlan] && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">{LICENSE_PLANS[selectedPlan].name} Plan</span>
+                          <span className="text-sm text-amber-700 dark:text-amber-400 font-semibold">
+                            {LICENSE_PLANS[selectedPlan].attendees.toLocaleString()} prepaid attendees
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Usage will be tracked and alerts sent when approaching this limit.
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="license-notes">Pro Services Notes (Optional)</Label>
+                      <Textarea
+                        id="license-notes"
+                        placeholder="Any notes for the pro services team..."
+                        value={formData.licenseNotes}
+                        onChange={(e) => setFormData({ ...formData, licenseNotes: e.target.value })}
+                        rows={2}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 mt-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="license-start-date">
+                      Contract Start Date <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="license-start-date"
+                      type="date"
+                      value={formData.licenseStartDate}
+                      onChange={(e) => setFormData({ ...formData, licenseStartDate: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="license-end-date">
+                      Contract End Date <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="license-end-date"
+                      type="date"
+                      value={formData.licenseEndDate}
+                      onChange={(e) => setFormData({ ...formData, licenseEndDate: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
               </div>
             </div>
             <DialogFooter>
@@ -357,13 +559,21 @@ export default function CustomerManagement() {
                 {customer.contactEmail}
               </div>
               <div className="flex items-center justify-between pt-2">
-                <Badge
-                  variant={customer.status === "active" ? "default" : "secondary"}
-                >
-                  {customer.status === "active" ? "Active" : "Inactive"}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={customer.status === "active" ? "default" : "secondary"}
+                  >
+                    {customer.status === "active" ? "Active" : "Inactive"}
+                  </Badge>
+                  {getLicenseBadge(customer)}
+                </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
+              {customer.licenseType === "premium" && customer.prepaidAttendees && (
+                <div className="text-xs text-muted-foreground">
+                  {customer.prepaidAttendees.toLocaleString()} prepaid attendees
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}

@@ -1,4 +1,4 @@
-# CheckinKit (Checkmate) - System Architecture Overview
+# CheckinKit (Greet) - System Architecture Overview
 
 **Version:** 1.0  
 **Date:** February 2026  

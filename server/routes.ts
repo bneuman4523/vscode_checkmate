@@ -25,6 +25,7 @@ import { checkinSyncService } from "./services/checkin-sync-service";
 import badgeAiRoutes from "./routes/badge-ai";
 import { createAssistantRouter } from "./assistant/route";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
+import { registerLocalStorageRoutes } from "./services/local-storage";
 import { registerReportRoutes } from "./routes/reports";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
@@ -222,7 +223,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(authMiddleware);
   
   // Register object storage routes (after authMiddleware so req.dbUser is populated)
-  registerObjectStorageRoutes(app);
+  if (process.env.REPL_ID) {
+    registerObjectStorageRoutes(app);
+  } else {
+    registerLocalStorageRoutes(app);
+  }
   
   // Register report routes (must be after authMiddleware so req.dbUser is populated)
   registerReportRoutes(app);
@@ -390,7 +395,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user.phoneNumber) {
         const { smsService } = await import('./services/sms-service');
         if (smsService.isConfigured()) {
-          const message = `Your Checkmate login code is: ${code}\n\nThis code expires in 10 minutes.`;
+          const message = `Your Greet login code is: ${code}\n\nThis code expires in 10 minutes.`;
           const result = await smsService.sendSMS({ to: user.phoneNumber, message });
           sent = result.success;
           error = result.error;
@@ -1001,7 +1006,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Set Your Password - Checkmate</title>
+  <title>Set Your Password - Greet</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -1412,7 +1417,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (smsService.isConfigured()) {
           const baseUrl = `${req.protocol}://${req.get('host')}`;
           const name = user.firstName || 'there';
-          const message = `Hi ${name}! Your Checkmate account is ready. Log in at ${baseUrl}/login using this phone number to receive a one-time code.`;
+          const message = `Hi ${name}! Your Greet account is ready. Log in at ${baseUrl}/login using this phone number to receive a one-time code.`;
           
           logger.info(`Sending welcome SMS to ${user.phoneNumber}`);
           const result = await smsService.sendSMS({ to: user.phoneNumber, message });
@@ -1712,13 +1717,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create customer
   app.post("/api/customers", requireAuth, async (req, res) => {
     try {
-      // Only super admins can create customers
       if (!isSuperAdmin(req.dbUser)) {
         return res.status(403).json({ error: "Only super admins can create customers" });
       }
       
-      const customerData = insertCustomerSchema.parse(req.body);
+      const body = { ...req.body };
+      if (body.licenseStartDate && typeof body.licenseStartDate === "string") {
+        body.licenseStartDate = new Date(body.licenseStartDate);
+      }
+      if (body.licenseEndDate && typeof body.licenseEndDate === "string") {
+        body.licenseEndDate = new Date(body.licenseEndDate);
+      }
+      const customerData = insertCustomerSchema.parse(body);
       const customer = await storage.createCustomer(customerData);
+      
+      try {
+        const { provisionFeatureFlags } = await import("./services/license-provisioning");
+        const licenseType = (customerData.licenseType as "basic" | "premium") || "basic";
+        await provisionFeatureFlags(customer.id, licenseType);
+      } catch (provisionError) {
+        logger.error({ err: provisionError, customerId: customer.id }, "Feature provisioning failed, cleaning up");
+        await storage.deleteCustomer(customer.id);
+        throw new Error("Failed to provision features for new account");
+      }
+      
       res.status(201).json(customer);
     } catch (error: any) {
       logger.error({ err: error }, "Error creating customer");
@@ -1755,6 +1777,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error({ err: error }, "Error updating customer");
       res.status(500).json({ error: "Failed to update customer" });
+    }
+  });
+
+  // Update kiosk branding for a customer (admin can update their own account)
+  app.patch("/api/customers/:id/branding", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.dbUser;
+
+      // Admins can update their own account, super_admins can update any
+      if (!isSuperAdmin(user) && user?.customerId !== id) {
+        return res.status(403).json({ error: "You can only update branding for your own account" });
+      }
+      if (!isSuperAdmin(user) && user?.role !== "admin") {
+        return res.status(403).json({ error: "Only admins can update branding" });
+      }
+
+      const existingCustomer = await storage.getCustomer(id);
+      if (!existingCustomer) {
+        return res.status(404).json({ error: "Customer not found" });
+      }
+
+      const { kioskBranding } = req.body;
+      const updatedCustomer = await storage.updateCustomer(id, { kioskBranding });
+      res.json(updatedCustomer);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating customer branding");
+      res.status(500).json({ error: "Failed to update branding" });
     }
   });
 
@@ -2078,6 +2128,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Customer not found" });
       }
       const hasPin = !!(event.tempStaffSettings as any)?.kioskPin;
+      // Resolve branding: event override if enabled, otherwise account default
+      const eventBranding = (event.kioskBrandingOverride as any)?.enabled ? event.kioskBrandingOverride : null;
+      const branding = eventBranding || customer.kioskBranding || null;
       res.json({
         event: {
           id: event.id,
@@ -2092,6 +2145,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: customer.name,
         },
         hasPin,
+        branding,
+        badgeSettings: event.badgeSettings || null,
       });
     } catch (error: any) {
       res.status(500).json({ error: "Failed to load kiosk launch info" });
@@ -2284,6 +2339,204 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error({ err: error }, "Error in kiosk check-in");
       res.status(500).json({ error: "Check-in failed" });
+    }
+  });
+
+  // Group check-in: lookup group by order code (kiosk - PIN required)
+  app.post("/api/kiosk/:eventId/group-lookup", async (req, res) => {
+    try {
+      const { pin, orderCode } = req.body;
+      if (!pin || !orderCode) {
+        return res.status(400).json({ error: "PIN and orderCode are required" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members: members.map((a: any) => ({
+          id: a.id, firstName: a.firstName, lastName: a.lastName,
+          email: a.email, company: a.company, title: a.title,
+          participantType: a.participantType, checkedIn: a.checkedIn,
+          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
+          externalId: a.externalId, orderCode: a.orderCode,
+        })),
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Group check-in: lookup group by order code (staff - auth required)
+  app.get("/api/events/:eventId/group/:orderCode", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members,
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Group check-in: batch check-in multiple attendees at once
+  app.post("/api/events/:eventId/group-checkin", requireAuth, async (req, res) => {
+    try {
+      const { attendeeIds, orderCode, checkedInBy } = req.body;
+      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          // Trigger real-time sync if configured
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
+    }
+  });
+
+  // Kiosk batch check-in (PIN auth)
+  app.post("/api/kiosk/:eventId/group-checkin", async (req, res) => {
+    try {
+      const { pin, attendeeIds, checkedInBy } = req.body;
+      if (!pin || !Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "PIN and attendeeIds are required" });
+      }
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Kiosk Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in kiosk group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in kiosk group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
     }
   });
 
@@ -3176,6 +3429,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultRegistrationStatusFilter: event.tempStaffSettings.defaultRegistrationStatusFilter,
       } : null;
       
+      // Capture selected statuses from the source event
+      const eventSelectedStatuses = (event.syncSettings as any)?.selectedStatuses || null;
+
       const template = await storage.createEventConfigurationTemplate({
         customerId: event.customerId,
         name,
@@ -3185,6 +3441,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultPrinterId: event.selectedPrinterId,
         staffSettings,
         workflowSnapshot,
+        selectedStatuses: eventSelectedStatuses,
         isDefault: false,
       });
       
@@ -3254,6 +3511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           defaultBadgeTemplateId: sourceEvent.defaultBadgeTemplateId,
           badgeTemplateOverrides: Object.keys(badgeTemplateOverrides).length > 0 ? badgeTemplateOverrides : null,
           defaultPrinterId: sourceEvent.selectedPrinterId,
+          selectedStatuses: (sourceEvent.syncSettings as any)?.selectedStatuses || null,
           staffSettings: sourceEvent.tempStaffSettings?.enabled ? {
             enabled: true,
             startPreset: '1_week_before',
@@ -3303,8 +3561,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultEndTime.setDate(defaultEndTime.getDate() + 1);
         defaultEndTime.setHours(23, 59, 59, 999);
         
+        const manualStatusesOk = !!(event.syncSettings as any)?.statusesConfigured;
         await storage.updateEvent(eventId, {
-          configStatus: 'configured',
+          configStatus: manualStatusesOk ? 'configured' : 'unconfigured',
           tempStaffSettings: {
             enabled: true,
             passcodeHash: hashedPasscode,
@@ -3504,10 +3763,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Update event config status to configured
-      await storage.updateEvent(eventId, { 
-        configStatus: 'configured',
-        configuredAt: new Date(),
+      // Apply selected statuses from template/source if available
+      if (config.selectedStatuses && config.selectedStatuses.length > 0) {
+        const currentSyncSettings = (event.syncSettings as any) || {};
+        await storage.updateEvent(eventId, {
+          syncSettings: {
+            ...currentSyncSettings,
+            selectedStatuses: config.selectedStatuses,
+            statusesConfigured: true,
+          },
+        });
+      }
+
+      // Update event config status — only mark configured if statuses are set
+      const refreshedEvent = await storage.getEvent(eventId);
+      const statusesOk = !!(refreshedEvent?.syncSettings as any)?.statusesConfigured;
+      await storage.updateEvent(eventId, {
+        configStatus: statusesOk ? 'configured' : 'unconfigured',
+        configuredAt: statusesOk ? new Date() : null,
         configTemplateId: templateId || null,
       });
       
@@ -3951,7 +4224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             endpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}/{{externalId}}",
             walkinEndpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}",
             walkinStatus: "Attended",
-            walkinSource: "Checkmate",
+            walkinSource: "Greet",
             checkinStatus: "Attended",
             revertStatus: "Registered",
             maxRetries: 3,
@@ -6790,8 +7063,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Event not found" });
       }
 
-      const dbUser = (req as any).dbUser;
-      if (!dbUser?.isSuperAdmin && event.customerId !== dbUser?.customerId) {
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
         return res.status(403).json({ error: "Forbidden" });
       }
       
@@ -7907,6 +8179,124 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get discovered attendee statuses for an event
+  app.get("/api/events/:eventId/discovered-statuses", requireAuth, async (req, res) => {
+    try {
+      const { eventId } = req.params;
+      const event = await storage.getEvent(eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const attendees = await storage.getAttendees(eventId);
+      const statusCounts = new Map<string, number>();
+      for (const a of attendees) {
+        const label = (a as any).registrationStatusLabel || a.registrationStatus || 'Unknown';
+        statusCounts.set(label, (statusCounts.get(label) || 0) + 1);
+      }
+
+      const statuses = Array.from(statusCounts.entries())
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count);
+
+      const syncSettings = (event.syncSettings as any) || {};
+      res.json({
+        statuses,
+        selectedStatuses: syncSettings.selectedStatuses || null,
+        statusesConfigured: !!syncSettings.statusesConfigured,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Error fetching discovered statuses");
+      res.status(500).json({ error: "Failed to fetch discovered statuses" });
+    }
+  });
+
+  // Update selected attendee statuses for an event (add-only for non-super_admin)
+  app.patch("/api/events/:eventId/selected-statuses", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { eventId } = req.params;
+      const event = await storage.getEvent(eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const { selectedStatuses } = req.body;
+      if (!Array.isArray(selectedStatuses) || selectedStatuses.length === 0) {
+        return res.status(400).json({ error: "selectedStatuses must be a non-empty array of strings" });
+      }
+
+      const existing = (event.syncSettings as any) || {};
+      const previouslySelected: string[] = existing.selectedStatuses || [];
+
+      // Add-only enforcement: non-super_admin cannot remove previously selected statuses
+      if (!isSuperAdmin(req.dbUser) && previouslySelected.length > 0) {
+        const removed = previouslySelected.filter((s: string) => !selectedStatuses.includes(s));
+        if (removed.length > 0) {
+          return res.status(403).json({
+            error: "Only super admins can remove previously selected statuses",
+            removedStatuses: removed,
+          });
+        }
+      }
+
+      const updated = {
+        ...existing,
+        selectedStatuses,
+        statusesConfigured: true,
+      };
+
+      const updatedEvent = await storage.updateEvent(eventId, { syncSettings: updated });
+
+      // Stamp billableAt on matching attendees that don't already have it
+      const attendees = await storage.getAttendees(eventId);
+      const now = new Date();
+      let newlyBillable = 0;
+      for (const attendee of attendees) {
+        if ((attendee as any).billableAt) continue; // Already stamped
+        const status = (attendee as any).registrationStatusLabel || attendee.registrationStatus;
+        if (selectedStatuses.includes(status)) {
+          await storage.updateAttendee(attendee.id, { billableAt: now } as any);
+          newlyBillable++;
+        }
+      }
+      if (newlyBillable > 0) {
+        logger.info(`Stamped billableAt on ${newlyBillable} attendees for event ${eventId}`);
+      }
+
+      await storage.createAuditLog({
+        action: "event_status_selection_update",
+        userId: req.dbUser?.id || "unknown",
+        userEmail: req.dbUser?.email || "unknown",
+        userRole: req.dbUser?.role || "unknown",
+        customerId: event.customerId,
+        customerName: null,
+        resourceType: "event",
+        resourceId: eventId,
+        resourceName: event.name,
+        changedFields: [{
+          field: "selectedStatuses",
+          oldValue: previouslySelected.length > 0 ? previouslySelected.join(", ") : "none",
+          newValue: selectedStatuses.join(", "),
+        }],
+        metadata: null,
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || null,
+        userAgent: req.headers["user-agent"] || null,
+      });
+
+      res.json({
+        selectedStatuses: updated.selectedStatuses,
+        statusesConfigured: true,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Error updating selected statuses");
+      res.status(500).json({ error: "Failed to update selected statuses" });
+    }
+  });
+
   // Configure temp staff settings for an event (admin only)
   app.patch("/api/events/:eventId/staff-settings", requireAuth, async (req, res) => {
     try {
@@ -7920,7 +8310,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const { enabled, passcode, startTime, endTime, badgeTemplateId, allowedSessionIds, allowWalkins, allowKioskFromStaff, allowGroupCheckin, allowKioskWalkins, kioskWalkinConfig } = req.body;
+      const { enabled, passcode, startTime, endTime, badgeTemplateId, allowedSessionIds, allowWalkins, allowKioskFromStaff, allowGroupCheckin, groupDisclaimerMode, groupCheckinEnabled, allowKioskWalkins, kioskWalkinConfig } = req.body;
 
       // Validate time window
       if (startTime && endTime && new Date(startTime) >= new Date(endTime)) {
@@ -7950,6 +8340,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           allowWalkins: allowWalkins !== undefined ? allowWalkins : (staffSettings?.allowWalkins ?? false),
           allowKioskFromStaff: allowKioskFromStaff !== undefined ? allowKioskFromStaff : (staffSettings?.allowKioskFromStaff ?? false),
           allowGroupCheckin: allowGroupCheckin !== undefined ? allowGroupCheckin : (staffSettings?.allowGroupCheckin ?? false),
+          groupDisclaimerMode: groupDisclaimerMode !== undefined ? groupDisclaimerMode : (staffSettings?.groupDisclaimerMode ?? 'group'),
+          groupCheckinEnabled: groupCheckinEnabled !== undefined ? groupCheckinEnabled : (staffSettings?.groupCheckinEnabled ?? false),
           allowKioskWalkins: allowKioskWalkins !== undefined ? allowKioskWalkins : (staffSettings?.allowKioskWalkins ?? false),
           kioskWalkinConfig: kioskWalkinConfig !== undefined ? {
             enabledFields: Array.isArray(kioskWalkinConfig?.enabledFields) ? kioskWalkinConfig.enabledFields.filter((f: string) => ['firstName', 'lastName', 'email', 'company', 'title', 'participantType'].includes(f)) : ['firstName', 'lastName', 'email'],
@@ -7972,7 +8364,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         tempStaffSettings: staffSettings as any,
       };
       if (staffSettings?.enabled) {
-        updateData.configStatus = 'configured';
+        const staffEvent = await storage.getEvent(req.params.eventId);
+        const staffStatusesOk = !!(staffEvent?.syncSettings as any)?.statusesConfigured;
+        if (staffStatusesOk) {
+          updateData.configStatus = 'configured';
+        }
       }
 
       const updatedEvent = await storage.updateEvent(req.params.eventId, updateData);
@@ -8020,6 +8416,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         allowWalkins: settings?.allowWalkins || false,
         allowKioskFromStaff: settings?.allowKioskFromStaff || false,
         allowGroupCheckin: settings?.allowGroupCheckin || false,
+        groupDisclaimerMode: settings?.groupDisclaimerMode || 'group',
+        groupCheckinEnabled: settings?.groupCheckinEnabled || false,
         allowKioskWalkins: settings?.allowKioskWalkins || false,
         kioskWalkinConfig: settings?.kioskWalkinConfig || null,
       });
@@ -8197,12 +8595,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           customerId: event.customerId,
           customerName: customer?.name,
           eventDate: event.eventDate,
+          syncSettings: event.syncSettings || null,
+          tempStaffSettings: event.tempStaffSettings || null,
         },
         settings: {
           printPreviewOnCheckin: event.tempStaffSettings?.printPreviewOnCheckin || false,
           allowWalkins: event.tempStaffSettings?.allowWalkins || false,
           allowKioskFromStaff: event.tempStaffSettings?.allowKioskFromStaff || false,
           allowGroupCheckin: event.tempStaffSettings?.allowGroupCheckin || false,
+          groupDisclaimerMode: event.tempStaffSettings?.groupDisclaimerMode || 'group',
+          groupCheckinEnabled: event.tempStaffSettings?.groupCheckinEnabled || false,
         },
       });
     } catch (error) {
@@ -8490,10 +8892,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
         badgePrinted: a.badgePrinted,
         badgePrintedAt: a.badgePrintedAt,
         externalId: a.externalId,
+        orderCode: a.orderCode,
       })));
     } catch (error) {
       logger.error({ err: error }, "Error fetching attendees for temp staff");
       res.status(500).json({ error: "Failed to fetch attendees" });
+    }
+  });
+
+  // Staff group lookup by order code
+  app.get("/api/staff/group/:orderCode", staffAuth as any, async (req: StaffRequest, res) => {
+    try {
+      const event = req.staffEvent!;
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members: members.map((a: any) => ({
+          id: a.id, firstName: a.firstName, lastName: a.lastName,
+          email: a.email, company: a.company, title: a.title,
+          participantType: a.participantType, checkedIn: a.checkedIn,
+          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
+          externalId: a.externalId, orderCode: a.orderCode,
+        })),
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in staff group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Staff batch group check-in
+  app.post("/api/staff/group-checkin", staffAuth as any, async (req: StaffRequest, res) => {
+    try {
+      const event = req.staffEvent!;
+      const { attendeeIds, checkedInBy } = req.body;
+      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
+      }
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Staff Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in staff group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in staff group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
     }
   });
 
@@ -10347,6 +10838,250 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===== License & Usage Management =====
+
+  app.get("/api/customers/:customerId/license", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      const { getAccountFeatureConfigs } = await import("./services/license-provisioning");
+      const featureConfigs = await getAccountFeatureConfigs(customerId);
+
+      res.json({
+        licenseType: customer.licenseType,
+        licensePlan: customer.licensePlan,
+        prepaidAttendees: customer.prepaidAttendees,
+        licenseStartDate: customer.licenseStartDate,
+        licenseEndDate: customer.licenseEndDate,
+        licenseNotes: customer.licenseNotes,
+        featureConfigs,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching license info");
+      res.status(500).json({ error: "Failed to fetch license info" });
+    }
+  });
+
+  // Billing: get billable attendee counts for a customer within a date range
+  app.get("/api/customers/:customerId/billing", requireAuth, requireRole(['super_admin', 'admin']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      // Use contract dates or query params for date range
+      const startDate = req.query.startDate
+        ? new Date(req.query.startDate as string)
+        : customer.licenseStartDate || new Date(0);
+      const endDate = req.query.endDate
+        ? new Date(req.query.endDate as string)
+        : customer.licenseEndDate || new Date();
+
+      const events = await storage.getEvents(customerId);
+      const eventBreakdown = [];
+      let totalBillable = 0;
+      let totalAttendees = 0;
+
+      for (const event of events) {
+        const attendees = await storage.getAttendees(event.id);
+        const billable = attendees.filter((a: any) => {
+          if (!a.billableAt) return false;
+          const billableDate = new Date(a.billableAt);
+          return billableDate >= startDate && billableDate <= endDate;
+        });
+
+        totalAttendees += attendees.length;
+        totalBillable += billable.length;
+
+        if (attendees.length > 0) {
+          eventBreakdown.push({
+            eventId: event.id,
+            eventName: event.name,
+            eventDate: event.eventDate,
+            totalAttendees: attendees.length,
+            billableAttendees: billable.length,
+            statusesConfigured: !!(event.syncSettings as any)?.statusesConfigured,
+          });
+        }
+      }
+
+      res.json({
+        customerId,
+        contractStart: startDate,
+        contractEnd: endDate,
+        prepaidAttendees: customer.prepaidAttendees || 0,
+        totalAttendees,
+        totalBillable,
+        overage: Math.max(0, totalBillable - (customer.prepaidAttendees || 0)),
+        events: eventBreakdown,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching billing data");
+      res.status(500).json({ error: "Failed to fetch billing data" });
+    }
+  });
+
+  const licenseUpdateSchema = z.object({
+    licenseType: z.enum(["basic", "premium"]).optional(),
+    licensePlan: z.enum(["starter", "professional", "enterprise", "strategic"]).nullable().optional(),
+    prepaidAttendees: z.number().int().positive().nullable().optional(),
+    licenseStartDate: z.string().nullable().optional(),
+    licenseEndDate: z.string().nullable().optional(),
+    licenseNotes: z.string().max(1000).nullable().optional(),
+  });
+
+  app.patch("/api/customers/:customerId/license", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { customerId } = req.params;
+      const parsed = licenseUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten().fieldErrors });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      const { licenseType, licensePlan, prepaidAttendees, licenseStartDate, licenseEndDate, licenseNotes } = parsed.data;
+      const updateData: Record<string, any> = {};
+      if (licenseType !== undefined) updateData.licenseType = licenseType;
+      if (licensePlan !== undefined) updateData.licensePlan = licensePlan;
+      if (prepaidAttendees !== undefined) updateData.prepaidAttendees = prepaidAttendees;
+      if (licenseStartDate !== undefined) updateData.licenseStartDate = licenseStartDate ? new Date(licenseStartDate) : null;
+      if (licenseEndDate !== undefined) updateData.licenseEndDate = licenseEndDate ? new Date(licenseEndDate) : null;
+      if (licenseNotes !== undefined) updateData.licenseNotes = licenseNotes;
+
+      const updated = await storage.updateCustomer(customerId, updateData);
+
+      if (licenseType && licenseType !== customer.licenseType) {
+        const { updateLicenseFeatures } = await import("./services/license-provisioning");
+        await updateLicenseFeatures(customerId, licenseType);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating license");
+      res.status(500).json({ error: "Failed to update license" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/features", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { getAccountFeatureConfigs, getFeatureDefinitions } = await import("./services/license-provisioning");
+      const configs = await getAccountFeatureConfigs(customerId);
+      const definitions = getFeatureDefinitions();
+
+      const features = definitions.map(def => {
+        const config = configs.find(c => c.featureKey === def.key);
+        return {
+          key: def.key,
+          name: def.name,
+          category: def.category,
+          enabled: config?.enabled ?? false,
+          metadata: config?.metadata || def.metadata || null,
+        };
+      });
+
+      res.json(features);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching account features");
+      res.status(500).json({ error: "Failed to fetch features" });
+    }
+  });
+
+  app.patch("/api/customers/:customerId/features/:featureKey", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { customerId, featureKey } = req.params;
+      const { enabled } = req.body;
+
+      if (typeof enabled !== "boolean") {
+        return res.status(400).json({ error: "enabled must be a boolean" });
+      }
+
+      const { toggleAccountFeature } = await import("./services/license-provisioning");
+      const success = await toggleAccountFeature(customerId, featureKey, enabled);
+
+      if (!success) {
+        return res.status(404).json({ error: "Feature config not found" });
+      }
+
+      res.json({ featureKey, enabled });
+    } catch (error) {
+      logger.error({ err: error }, "Error toggling feature");
+      res.status(500).json({ error: "Failed to toggle feature" });
+    }
+  });
+
+  app.get("/api/customers/:customerId/usage", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const { getUsageSummary } = await import("./services/usage-tracking");
+      const summary = await getUsageSummary(customerId);
+      if (!summary) return res.status(404).json({ error: "Customer not found" });
+      res.json(summary);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching usage");
+      res.status(500).json({ error: "Failed to fetch usage" });
+    }
+  });
+
+  app.get("/api/mission-control/usage-overview", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { getAllPremiumUsageSummaries } = await import("./services/usage-tracking");
+      const summaries = await getAllPremiumUsageSummaries();
+      res.json(summaries);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching usage overview");
+      res.status(500).json({ error: "Failed to fetch usage overview" });
+    }
+  });
+
+  app.post("/api/mission-control/usage-snapshot", requireAuth, async (req, res) => {
+    try {
+      if (!isSuperAdmin(req.dbUser)) {
+        return res.status(403).json({ error: "Super admin access required" });
+      }
+
+      const { runDailyUsageCheck } = await import("./services/usage-tracking");
+      await runDailyUsageCheck();
+      res.json({ success: true, message: "Usage snapshots taken and alerts checked" });
+    } catch (error) {
+      logger.error({ err: error }, "Error running usage snapshot");
+      res.status(500).json({ error: "Failed to run usage snapshot" });
+    }
+  });
+
   // ===== Mission Control: Feature Flags CRUD (super admin only) =====
 
   app.get("/api/mission-control/flags", requireAuth, async (req, res) => {
@@ -10506,7 +11241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const result = await smsService.sendSMS({ 
         to: phoneNumber, 
-        message: "Checkmate Twilio test successful! Your SMS configuration is working." 
+        message: "Greet Twilio test successful! Your SMS configuration is working." 
       });
       
       if (result.success) {
@@ -10886,13 +11621,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { feedbackEntries, customers } = await import("@shared/schema");
       const { desc, eq, and, gte, sql } = await import("drizzle-orm");
 
-      const { type, status, page: pageNum = "1", limit: limitStr = "50", since } = req.query;
+      const { type, status, page: pageNum = "1", limit: limitStr = "50", since, customerId: filterCustomerId } = req.query;
       const limit = Math.min(parseInt(limitStr as string) || 50, 200);
       const offset = (Math.max(parseInt(pageNum as string) || 1, 1) - 1) * limit;
 
       let conditions: any[] = [];
       if (!isSuperAdmin && req.dbUser?.customerId) {
         conditions.push(eq(feedbackEntries.customerId, req.dbUser.customerId));
+      } else if (isSuperAdmin && filterCustomerId) {
+        conditions.push(eq(feedbackEntries.customerId, filterCustomerId as string));
       }
       if (type) conditions.push(eq(feedbackEntries.type, type as any));
       if (status) conditions.push(eq(feedbackEntries.status, status as any));
@@ -11032,21 +11769,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/admin/alpha-feedback-tracker", requireAuth, async (req: any, res) => {
-    try {
-      if (req.dbUser?.role !== "super_admin") {
-        return res.status(403).json({ error: "Super admin access required" });
-      }
-      const fs = await import("fs");
-      const path = await import("path");
-      const filePath = path.join(process.cwd(), "docs", "Alpha-Feedback-Tracker.md");
-      const content = fs.readFileSync(filePath, "utf-8");
-      res.json({ content });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error reading alpha feedback tracker");
-      res.status(500).json({ error: "Failed to load alpha feedback tracker" });
-    }
-  });
 
   app.get("/api/admin/feedback/stats", requireAuth, async (req: any, res) => {
     try {
@@ -11059,9 +11781,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { feedbackEntries } = await import("@shared/schema");
       const { sql, eq } = await import("drizzle-orm");
 
-      const tenantFilter = !isSuperAdmin && req.dbUser?.customerId
-        ? eq(feedbackEntries.customerId, req.dbUser.customerId)
-        : undefined;
+      const { customerId: filterCustomerId } = req.query;
+      let tenantFilter;
+      if (!isSuperAdmin && req.dbUser?.customerId) {
+        tenantFilter = eq(feedbackEntries.customerId, req.dbUser.customerId);
+      } else if (isSuperAdmin && filterCustomerId) {
+        tenantFilter = eq(feedbackEntries.customerId, filterCustomerId as string);
+      }
 
       const [stats] = await db.select({
         total: sql<number>`count(*)::int`,

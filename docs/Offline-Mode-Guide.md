@@ -2,7 +2,7 @@
 
 ## Overview
 
-Checkmate includes robust offline-first capabilities that allow staff to continue checking in attendees even when internet connectivity is lost. All check-ins performed offline are automatically synced back to the server when connectivity is restored.
+Greet includes robust offline-first capabilities that allow staff to continue checking in attendees even when internet connectivity is lost. All check-ins performed offline are automatically synced back to the server when connectivity is restored.
 
 ## How It Works
 
