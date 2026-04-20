@@ -548,8 +548,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                                 <Label htmlFor="back-qr-embed-type" className="text-xs">Embed Type</Label>
                                 <Select
                                   value={backSideQrCodeConfig.embedType}
-                                  onValueChange={(value: 'externalId' | 'simple' | 'json' | 'custom') => {
-                                    const newFields = value === 'externalId' ? ['externalId'] : backSideQrCodeConfig.fields;
+                                  onValueChange={(value: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom') => {
+                                    const newFields = value === 'externalId' ? ['externalId'] : value === 'externalProfileId' ? ['externalProfileId'] : backSideQrCodeConfig.fields;
                                     setBackSideQrCodeConfig({ ...backSideQrCodeConfig, embedType: value, fields: newFields });
                                   }}
                                 >
@@ -939,8 +939,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                     <Label htmlFor="qr-embed-type">Embed Type</Label>
                     <Select 
                       value={qrCodeConfig.embedType} 
-                      onValueChange={(value: 'externalId' | 'simple' | 'json' | 'custom') => {
-                        const newFields = value === 'externalId' ? ['externalId'] : qrCodeConfig.fields;
+                      onValueChange={(value: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom') => {
+                        const newFields = value === 'externalId' ? ['externalId'] : value === 'externalProfileId' ? ['externalProfileId'] : qrCodeConfig.fields;
                         setQrCodeConfig({ ...qrCodeConfig, embedType: value, fields: newFields });
                       }}
                     >
