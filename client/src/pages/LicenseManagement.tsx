@@ -126,6 +126,29 @@ export default function LicenseManagement() {
     enabled: !!customerId,
   });
 
+  interface BillingData {
+    customerId: string;
+    contractStart: string;
+    contractEnd: string;
+    prepaidAttendees: number;
+    totalAttendees: number;
+    totalBillable: number;
+    overage: number;
+    events: Array<{
+      eventId: string;
+      eventName: string;
+      eventDate: string;
+      totalAttendees: number;
+      billableAttendees: number;
+      statusesConfigured: boolean;
+    }>;
+  }
+
+  const { data: billing, isLoading: billingLoading } = useQuery<BillingData>({
+    queryKey: [`/api/customers/${customerId}/billing`],
+    enabled: !!customerId,
+  });
+
   useEffect(() => {
     if (license && !editForm) {
       setEditForm({
@@ -303,6 +326,7 @@ export default function LicenseManagement() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="features">Features ({enabledCount}/{totalCount})</TabsTrigger>
           <TabsTrigger value="usage">Usage</TabsTrigger>
+          <TabsTrigger value="billing">Billing</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -751,6 +775,113 @@ export default function LicenseManagement() {
             <Card>
               <CardContent className="py-8 text-center text-muted-foreground">
                 No usage data available yet
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        <TabsContent value="billing" className="space-y-4 mt-4">
+          {billingLoading ? (
+            <Skeleton className="h-48" />
+          ) : billing ? (
+            <>
+              <div className="grid gap-4 md:grid-cols-4">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Billable Attendees</CardDescription>
+                    <CardTitle className="text-2xl">{billing.totalBillable.toLocaleString()}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-muted-foreground">Current contract period</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Prepaid Allowance</CardDescription>
+                    <CardTitle className="text-2xl">{billing.prepaidAttendees.toLocaleString()}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-muted-foreground">Included in plan</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Overage</CardDescription>
+                    <CardTitle className={`text-2xl ${billing.overage > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                      {billing.overage.toLocaleString()}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-xs text-muted-foreground">
+                      {billing.overage > 0 ? 'Above prepaid limit' : 'Within allowance'}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Usage</CardDescription>
+                    <CardTitle className="text-2xl">
+                      {billing.prepaidAttendees > 0
+                        ? `${Math.round((billing.totalBillable / billing.prepaidAttendees) * 100)}%`
+                        : '—'}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Progress
+                      value={billing.prepaidAttendees > 0
+                        ? Math.min(100, (billing.totalBillable / billing.prepaidAttendees) * 100)
+                        : 0}
+                      className="h-2"
+                    />
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Contract Period</CardTitle>
+                  <CardDescription>
+                    {new Date(billing.contractStart).toLocaleDateString()} — {new Date(billing.contractEnd).toLocaleDateString()}
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Billing by Event</CardTitle>
+                  <CardDescription>Billable attendees per event in this contract period</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {billing.events.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No events with attendees in this period</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {billing.events.map((event) => (
+                        <div key={event.eventId} className="flex items-center justify-between py-2 border-b last:border-0">
+                          <div>
+                            <p className="font-medium text-sm">{event.eventName}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {event.eventDate ? new Date(event.eventDate).toLocaleDateString() : 'No date'}
+                              {!event.statusesConfigured && (
+                                <Badge variant="outline" className="ml-2 text-amber-600">Statuses not configured</Badge>
+                              )}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold text-sm">{event.billableAttendees.toLocaleString()}</p>
+                            <p className="text-xs text-muted-foreground">of {event.totalAttendees.toLocaleString()} total</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                No billing data available
               </CardContent>
             </Card>
           )}

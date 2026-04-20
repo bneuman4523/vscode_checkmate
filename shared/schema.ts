@@ -540,6 +540,8 @@ export const attendees = pgTable("attendees", {
   // Order code for group registrations - matches primary attendee's externalId
   // Used for group check-in: scanning one badge prints all badges in the order
   orderCode: text("order_code"),
+  // Billing: timestamp when this attendee became billable (matched selected statuses)
+  billableAt: timestamp("billable_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   eventIdx: index("attendees_event_idx").on(table.eventId),

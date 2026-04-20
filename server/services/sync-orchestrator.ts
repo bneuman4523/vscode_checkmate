@@ -1383,6 +1383,16 @@ class SyncOrchestrator {
                         updatePayload.checkedInAt = existing.checkedInAt || new Date();
                       }
                       await storage.updateAttendee(existing.id, updatePayload);
+                      // Stamp billableAt if not already set and attendee now matches selected statuses
+                      if (!(existing as any).billableAt) {
+                        const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+                        if (selectedStatuses && selectedStatuses.length > 0) {
+                          const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+                          if (status && selectedStatuses.includes(status)) {
+                            await storage.updateAttendee(existing.id, { billableAt: new Date() } as any);
+                          }
+                        }
+                      }
                     } else {
                       const createPayload: any = {
                         eventId: event.id,
@@ -1401,7 +1411,15 @@ class SyncOrchestrator {
                         createPayload.checkedIn = true;
                         createPayload.checkedInAt = new Date();
                       }
-                      await storage.createAttendee(createPayload);
+                      const newAttendee = await storage.createAttendee(createPayload);
+                      // Stamp billableAt if event has status selection configured and this attendee matches
+                      const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+                      if (selectedStatuses && selectedStatuses.length > 0 && newAttendee) {
+                        const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+                        if (status && selectedStatuses.includes(status)) {
+                          await storage.updateAttendee(newAttendee.id, { billableAt: new Date() } as any);
+                        }
+                      }
                     }
                     savedCount++;
                   } catch (e) {
