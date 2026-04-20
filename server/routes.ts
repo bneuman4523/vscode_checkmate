@@ -25,6 +25,7 @@ import { checkinSyncService } from "./services/checkin-sync-service";
 import badgeAiRoutes from "./routes/badge-ai";
 import { createAssistantRouter } from "./assistant/route";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
+import { registerLocalStorageRoutes } from "./services/local-storage";
 import { registerReportRoutes } from "./routes/reports";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
@@ -222,7 +223,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(authMiddleware);
   
   // Register object storage routes (after authMiddleware so req.dbUser is populated)
-  registerObjectStorageRoutes(app);
+  if (process.env.REPL_ID) {
+    registerObjectStorageRoutes(app);
+  } else {
+    registerLocalStorageRoutes(app);
+  }
   
   // Register report routes (must be after authMiddleware so req.dbUser is populated)
   registerReportRoutes(app);
@@ -8048,6 +8053,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const updatedEvent = await storage.updateEvent(eventId, { syncSettings: updated });
 
+      // Stamp billableAt on matching attendees that don't already have it
+      const attendees = await storage.getAttendees(eventId);
+      const now = new Date();
+      let newlyBillable = 0;
+      for (const attendee of attendees) {
+        if ((attendee as any).billableAt) continue; // Already stamped
+        const status = (attendee as any).registrationStatusLabel || attendee.registrationStatus;
+        if (selectedStatuses.includes(status)) {
+          await storage.updateAttendee(attendee.id, { billableAt: now } as any);
+          newlyBillable++;
+        }
+      }
+      if (newlyBillable > 0) {
+        logger.info(`Stamped billableAt on ${newlyBillable} attendees for event ${eventId}`);
+      }
+
       await storage.createAuditLog({
         action: "event_status_selection_update",
         userId: req.dbUser?.id || "unknown",
@@ -10551,6 +10572,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error({ err: error }, "Error fetching license info");
       res.status(500).json({ error: "Failed to fetch license info" });
+    }
+  });
+
+  // Billing: get billable attendee counts for a customer within a date range
+  app.get("/api/customers/:customerId/billing", requireAuth, requireRole(['super_admin', 'admin']), async (req, res) => {
+    try {
+      const { customerId } = req.params;
+
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customerId) {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+
+      const customer = await storage.getCustomer(customerId);
+      if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+      // Use contract dates or query params for date range
+      const startDate = req.query.startDate
+        ? new Date(req.query.startDate as string)
+        : customer.licenseStartDate || new Date(0);
+      const endDate = req.query.endDate
+        ? new Date(req.query.endDate as string)
+        : customer.licenseEndDate || new Date();
+
+      const events = await storage.getEvents(customerId);
+      const eventBreakdown = [];
+      let totalBillable = 0;
+      let totalAttendees = 0;
+
+      for (const event of events) {
+        const attendees = await storage.getAttendees(event.id);
+        const billable = attendees.filter((a: any) => {
+          if (!a.billableAt) return false;
+          const billableDate = new Date(a.billableAt);
+          return billableDate >= startDate && billableDate <= endDate;
+        });
+
+        totalAttendees += attendees.length;
+        totalBillable += billable.length;
+
+        if (attendees.length > 0) {
+          eventBreakdown.push({
+            eventId: event.id,
+            eventName: event.name,
+            eventDate: event.eventDate,
+            totalAttendees: attendees.length,
+            billableAttendees: billable.length,
+            statusesConfigured: !!(event.syncSettings as any)?.statusesConfigured,
+          });
+        }
+      }
+
+      res.json({
+        customerId,
+        contractStart: startDate,
+        contractEnd: endDate,
+        prepaidAttendees: customer.prepaidAttendees || 0,
+        totalAttendees,
+        totalBillable,
+        overage: Math.max(0, totalBillable - (customer.prepaidAttendees || 0)),
+        events: eventBreakdown,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching billing data");
+      res.status(500).json({ error: "Failed to fetch billing data" });
     }
   });
 
