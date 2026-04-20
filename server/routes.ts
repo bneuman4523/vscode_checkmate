@@ -8892,10 +8892,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
         badgePrinted: a.badgePrinted,
         badgePrintedAt: a.badgePrintedAt,
         externalId: a.externalId,
+        orderCode: a.orderCode,
       })));
     } catch (error) {
       logger.error({ err: error }, "Error fetching attendees for temp staff");
       res.status(500).json({ error: "Failed to fetch attendees" });
+    }
+  });
+
+  // Staff group lookup by order code
+  app.get("/api/staff/group/:orderCode", staffAuth as any, async (req: StaffRequest, res) => {
+    try {
+      const event = req.staffEvent!;
+      const allAttendees = await storage.getAttendees(event.id);
+      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
+
+      if (members.length === 0) {
+        return res.json({ found: false, members: [], primaryId: null });
+      }
+
+      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
+      const primaryId = primary?.id || members[0].id;
+
+      res.json({
+        found: true,
+        members: members.map((a: any) => ({
+          id: a.id, firstName: a.firstName, lastName: a.lastName,
+          email: a.email, company: a.company, title: a.title,
+          participantType: a.participantType, checkedIn: a.checkedIn,
+          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
+          externalId: a.externalId, orderCode: a.orderCode,
+        })),
+        primaryId,
+        checkedInCount: members.filter((a: any) => a.checkedIn).length,
+        totalCount: members.length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in staff group lookup");
+      res.status(500).json({ error: "Group lookup failed" });
+    }
+  });
+
+  // Staff batch group check-in
+  app.post("/api/staff/group-checkin", staffAuth as any, async (req: StaffRequest, res) => {
+    try {
+      const event = req.staffEvent!;
+      const { attendeeIds, checkedInBy } = req.body;
+      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
+        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
+      }
+
+      const results = [];
+      const now = new Date();
+
+      for (const attendeeId of attendeeIds) {
+        try {
+          const attendee = await storage.getAttendee(attendeeId);
+          if (!attendee || attendee.eventId !== event.id) {
+            results.push({ attendeeId, success: false, error: "Attendee not found" });
+            continue;
+          }
+          if (attendee.checkedIn) {
+            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
+            continue;
+          }
+          const updated = await storage.updateAttendee(attendeeId, {
+            checkedIn: true,
+            checkedInAt: now,
+          });
+          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
+
+          try {
+            const integration = await checkinSyncService.getIntegrationForEvent(event);
+            if (integration) {
+              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Staff Group");
+            }
+          } catch (syncErr) {
+            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in staff group check-in`);
+          }
+        } catch (err) {
+          results.push({ attendeeId, success: false, error: "Check-in failed" });
+        }
+      }
+
+      res.json({
+        success: true,
+        results,
+        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
+        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
+        failed: results.filter(r => !r.success).length,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Error in staff group check-in");
+      res.status(500).json({ error: "Group check-in failed" });
     }
   });
 

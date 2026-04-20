@@ -5,6 +5,7 @@ interface UseGroupCheckinOptions {
   eventId: string;
   mode: 'kiosk' | 'staff';
   pin?: string; // required for kiosk mode
+  getStaffAuthHeaders?: () => Record<string, string>; // for staff mode auth
 }
 
 export interface GroupMember {
@@ -48,7 +49,7 @@ interface UseGroupCheckinReturn {
 }
 
 export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupCheckinReturn {
-  const { eventId, mode, pin } = options;
+  const { eventId, mode, pin, getStaffAuthHeaders } = options;
 
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
@@ -87,7 +88,12 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
         }
         data = await res.json();
       } else {
-        const res = await apiRequest('GET', `/api/events/${eventId}/group/${encodeURIComponent(orderCode)}`);
+        const headers = getStaffAuthHeaders ? getStaffAuthHeaders() : {};
+        const res = await fetch(`/api/staff/group/${encodeURIComponent(orderCode)}`, { headers });
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error || `Lookup failed (${res.status})`);
+        }
         data = await res.json();
       }
 
@@ -175,11 +181,16 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
         }
         data = await res.json();
       } else {
-        const res = await apiRequest('POST', `/api/events/${eventId}/group-checkin`, {
-          attendeeIds,
-          orderCode: members[0]?.orderCode,
-          checkedInBy: 'staff',
+        const headers = { 'Content-Type': 'application/json', ...(getStaffAuthHeaders ? getStaffAuthHeaders() : {}) };
+        const res = await fetch('/api/staff/group-checkin', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ attendeeIds, checkedInBy: 'staff' }),
         });
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error || `Check-in failed (${res.status})`);
+        }
         data = await res.json();
       }
 

@@ -953,8 +953,7 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
                 />
               </div>
 
-              {featureFlags.groupCheckin && (
-                <div className="rounded-lg border p-3 space-y-3">
+              <div className="rounded-lg border p-3 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="space-y-0.5">
                       <Label className="text-sm font-medium flex items-center gap-2">
@@ -1025,7 +1024,6 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
                     </div>
                   )}
                 </div>
-              )}
 
               {featureFlags.kioskWalkinRegistration && (
                 <div className="rounded-lg border p-3 space-y-3">
