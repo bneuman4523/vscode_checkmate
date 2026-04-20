@@ -14,6 +14,12 @@ export const authSessions = pgTable(
   (table) => [index("IDX_auth_session_expire").on(table.expire)],
 );
 
+export interface KioskBrandingConfig {
+  logoUrl?: string | null;
+  bannerUrl?: string | null;
+  kioskTheme?: 'light' | 'dark';
+}
+
 export interface DataRetentionPolicy {
   enabled: boolean;
   retentionDays: number;
@@ -30,6 +36,13 @@ export const customers = pgTable("customers", {
   apiBaseUrl: text("api_base_url"),
   status: text("status").notNull().default("active"),
   dataRetentionPolicy: jsonb("data_retention_policy").$type<DataRetentionPolicy>(),
+  licenseType: text("license_type").notNull().default("basic"),
+  licensePlan: text("license_plan"),
+  prepaidAttendees: integer("prepaid_attendees"),
+  licenseStartDate: timestamp("license_start_date"),
+  licenseEndDate: timestamp("license_end_date"),
+  licenseNotes: text("license_notes"),
+  kioskBranding: jsonb("kiosk_branding").$type<KioskBrandingConfig>(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -39,6 +52,51 @@ export const insertCustomerSchema = createInsertSchema(customers).omit({
 });
 export type InsertCustomer = z.infer<typeof insertCustomerSchema>;
 export type Customer = typeof customers.$inferSelect;
+
+export const accountFeatureConfigs = pgTable("account_feature_configs", {
+  id: text("id").primaryKey().$defaultFn(() => `afc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  featureKey: text("feature_key").notNull(),
+  enabled: boolean("enabled").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  customerKeyIdx: index("afc_customer_key_idx").on(table.customerId, table.featureKey),
+  customerIdx: index("afc_customer_idx").on(table.customerId),
+}));
+
+export type AccountFeatureConfig = typeof accountFeatureConfigs.$inferSelect;
+
+export const attendeeUsageSnapshots = pgTable("attendee_usage_snapshots", {
+  id: text("id").primaryKey().$defaultFn(() => `aus-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  snapshotDate: text("snapshot_date").notNull(),
+  totalAttendees: integer("total_attendees").notNull().default(0),
+  activeAttendees: integer("active_attendees").notNull().default(0),
+  eventCount: integer("event_count").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  customerIdx: index("aus_customer_idx").on(table.customerId),
+  dateIdx: index("aus_date_idx").on(table.snapshotDate),
+}));
+
+export type AttendeeUsageSnapshot = typeof attendeeUsageSnapshots.$inferSelect;
+
+export const usageAlerts = pgTable("usage_alerts", {
+  id: text("id").primaryKey().$defaultFn(() => `ua-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  alertType: text("alert_type").notNull(),
+  threshold: integer("threshold").notNull(),
+  attendeeCount: integer("attendee_count").notNull(),
+  prepaidLimit: integer("prepaid_limit").notNull(),
+  message: text("message").notNull(),
+  sentAt: timestamp("sent_at").notNull().defaultNow(),
+}, (table) => ({
+  customerIdx: index("ua_customer_idx").on(table.customerId),
+}));
+
+export type UsageAlert = typeof usageAlerts.$inferSelect;
 
 // Locations (physical venues scoped to customer accounts)
 export const locations = pgTable("locations", {
@@ -310,6 +368,12 @@ export const events = pgTable("events", {
   // Event-specific badge settings (JSON) - per-template font overrides, etc.
   badgeSettings: jsonb("badge_settings").$type<{
     fontOverrides?: Record<string, string>; // Map of templateId to font family
+    qrCodeConfigOverride?: {
+      embedType: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom';
+      fields: string[];
+      separator?: string;
+      includeLabel?: boolean;
+    } | null;
   }>(),
   // Temporary staff access settings
   tempStaffSettings: jsonb("temp_staff_settings").$type<{
@@ -325,6 +389,8 @@ export const events = pgTable("events", {
     allowKioskFromStaff?: boolean;
     defaultRegistrationStatusFilter?: RegistrationStatus[];
     allowGroupCheckin?: boolean;
+    groupDisclaimerMode?: 'group' | 'individual';
+    groupCheckinEnabled?: boolean;
     allowKioskWalkins?: boolean;
     kioskWalkinConfig?: {
       enabledFields: string[];
@@ -338,10 +404,13 @@ export const events = pgTable("events", {
     syncFrozen?: boolean;
     syncFrozenAt?: string;
     syncIntervalMinutes?: number | null;
+    selectedStatuses?: string[];
+    statusesConfigured?: boolean;
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),
   dataRetentionOverride: jsonb("data_retention_override").$type<Partial<DataRetentionPolicy>>(),
+  kioskBrandingOverride: jsonb("kiosk_branding_override").$type<KioskBrandingConfig & { enabled: boolean }>(),
   retentionNotifiedAt: timestamp("retention_notified_at"),
   retentionProcessedAt: timestamp("retention_processed_at"),
   status: text("status").notNull().default("upcoming"),
@@ -475,10 +544,13 @@ export const attendees = pgTable("attendees", {
   badgePrinted: boolean("badge_printed").notNull().default(false),
   badgePrintedAt: timestamp("badge_printed_at"),
   // External reference (not storing full external data)
-  externalId: text("external_id"), // Reference to external platform ID (registration code)
+  externalId: text("external_id"), // Registration code from external platform
+  externalProfileId: text("external_profile_id"), // External profile ID from Certain or other platforms
   // Order code for group registrations - matches primary attendee's externalId
   // Used for group check-in: scanning one badge prints all badges in the order
   orderCode: text("order_code"),
+  // Billing: timestamp when this attendee became billable (matched selected statuses)
+  billableAt: timestamp("billable_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   eventIdx: index("attendees_event_idx").on(table.eventId),
@@ -615,7 +687,7 @@ export const customerIntegrations = pgTable("customer_integrations", {
     endpointUrl: string;
     walkinEndpointUrl?: string; // Endpoint for creating new registrations (POST /Registration/{accountCode}/{eventCode})
     walkinStatus?: string; // Status label when creating walk-in registration (default: "Checked In")
-    walkinSource?: string; // Source label for walk-in registrations (default: "Checkmate")
+    walkinSource?: string; // Source label for walk-in registrations (default: "Greet")
     checkinStatus?: string; // Status label to send on check-in (e.g., "Checked In")
     revertStatus?: string; // Status label to send on revert (e.g., "Registered")
     maxRetries?: number; // Default 3
@@ -1603,6 +1675,8 @@ export interface StaffSettingsSnapshot {
   passcode?: string; // Plain text - will be hashed when applied
   printPreviewOnCheckin?: boolean;
   defaultRegistrationStatusFilter?: RegistrationStatus[];
+  groupDisclaimerMode?: 'group' | 'individual';
+  groupCheckinEnabled?: boolean;
 }
 
 // Event Configuration Templates table
@@ -1621,6 +1695,8 @@ export const eventConfigurationTemplates = pgTable("event_configuration_template
   staffSettings: jsonb("staff_settings").$type<StaffSettingsSnapshot>(),
   // Workflow configuration snapshot
   workflowSnapshot: jsonb("workflow_snapshot").$type<WorkflowSnapshot>(),
+  // Default attendee status selections for new events
+  selectedStatuses: jsonb("selected_statuses").$type<string[]>(),
   // Whether to auto-apply this template to newly synced events
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),

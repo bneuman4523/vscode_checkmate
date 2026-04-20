@@ -23,11 +23,11 @@ import {
   Star,
   ClipboardList,
   MessageSquare,
-  FileCheck,
   Rocket,
   Layers,
   BookOpen,
   Shield,
+  Crown,
 } from "lucide-react";
 import {
   Sidebar,
@@ -133,6 +133,7 @@ export function AppSidebar() {
     }
     items.push(
       { title: "Custom Fonts", url: `/customers/${selectedCustomer.id}/fonts`, icon: Palette },
+      { title: "Kiosk Branding", url: `/customers/${selectedCustomer.id}/branding`, icon: Palette },
       { title: "Event Configurations", url: `/customers/${selectedCustomer.id}/configurations`, icon: Settings2 },
     );
     return items;
@@ -148,17 +149,20 @@ export function AppSidebar() {
 
   const getAdminItems = () => {
     if (selectedCustomer) {
-      return [
+      const items = [
+        { title: "Feedback", url: "/feedback", icon: MessageSquare },
+        { title: "License & Features", url: `/customers/${selectedCustomer.id}/license`, icon: Crown },
         { title: "Badge Templates", url: `/customers/${selectedCustomer.id}/badge-templates`, icon: Palette },
         { title: "Locations", url: `/customers/${selectedCustomer.id}/locations`, icon: MapPin },
         { title: "Printer Settings", url: `/customers/${selectedCustomer.id}/printer-settings`, icon: Settings },
         { title: "User Management", url: `/customers/${selectedCustomer.id}/users`, icon: UserCircle },
         { title: "Data Retention", url: `/customers/${selectedCustomer.id}/data-retention`, icon: Shield },
       ];
+      return items;
     }
     if (user?.role === "admin") {
       return [
-        { title: "Beta Feedback", url: "/feedback", icon: MessageSquare },
+        { title: "Feedback", url: "/feedback", icon: MessageSquare },
       ];
     }
     return [];
@@ -171,8 +175,7 @@ export function AppSidebar() {
     { title: "System Settings", url: "/settings", icon: Settings },
     { title: "Error Report", url: "/errors", icon: Bug },
     { title: "Settings Audit Log", url: "/audit-log", icon: ClipboardList },
-    { title: "Alpha Feedback Tracker", url: "/alpha-feedback", icon: FileCheck },
-    { title: "Beta Feedback", url: "/feedback", icon: MessageSquare },
+    { title: "Feedback", url: "/feedback", icon: MessageSquare },
   ];
 
   const handleBackToCustomers = () => {
@@ -194,7 +197,7 @@ export function AppSidebar() {
           <img src="/certain-icon.svg" alt="Certain" className="h-9 w-9 flex-shrink-0" />
           {!isCollapsed && (
             <div>
-              <h2 className="text-lg font-semibold text-[#0B2958] dark:text-white">Checkmate</h2>
+              <h2 className="text-lg font-semibold text-[#0B2958] dark:text-white">Greet</h2>
               <p className="text-xs text-muted-foreground">
                 {user?.role === "super_admin" ? "Super Admin" 
                   : user?.role === "admin" ? "Admin Mode"

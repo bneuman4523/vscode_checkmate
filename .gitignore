@@ -9,6 +9,9 @@ vite.config.ts.*
 .env
 .env.*
 
+# Local file uploads
+uploads/
+
 # OS files
 .DS_Store
 Thumbs.db

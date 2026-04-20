@@ -729,7 +729,7 @@ class SyncOrchestrator {
         }
         const tagged: any[] = [];
         for (const evt of events) {
-          if (this.hasCheckmateTag(evt)) {
+          if (this.hasGreetTag(evt)) {
             tagged.push(evt);
           } else {
             const eid = evt.eventCode || evt.event_code || evt.eventId || evt.id;
@@ -1024,7 +1024,7 @@ class SyncOrchestrator {
     };
   }
 
-  private hasCheckmateTag(rawEvent: any): boolean {
+  private hasGreetTag(rawEvent: any): boolean {
     let tags = rawEvent?.tags?.tag;
     if (!tags && Array.isArray(rawEvent?.tags)) {
       tags = rawEvent.tags;
@@ -1383,6 +1383,16 @@ class SyncOrchestrator {
                         updatePayload.checkedInAt = existing.checkedInAt || new Date();
                       }
                       await storage.updateAttendee(existing.id, updatePayload);
+                      // Stamp billableAt if not already set and attendee now matches selected statuses
+                      if (!(existing as any).billableAt) {
+                        const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+                        if (selectedStatuses && selectedStatuses.length > 0) {
+                          const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+                          if (status && selectedStatuses.includes(status)) {
+                            await storage.updateAttendee(existing.id, { billableAt: new Date() } as any);
+                          }
+                        }
+                      }
                     } else {
                       const createPayload: any = {
                         eventId: event.id,
@@ -1393,6 +1403,7 @@ class SyncOrchestrator {
                         title: attendeeData.title || null,
                         participantType: attendeeData.participantType || 'General',
                         externalId: attendeeData.externalId,
+                        externalProfileId: attendeeData.externalProfileId || null,
                         registrationStatus: attendeeData.registrationStatus || 'Registered',
                         registrationStatusLabel: attendeeData.registrationStatusLabel || null,
                         orderCode: attendeeData.orderCode || null,
@@ -1401,7 +1412,15 @@ class SyncOrchestrator {
                         createPayload.checkedIn = true;
                         createPayload.checkedInAt = new Date();
                       }
-                      await storage.createAttendee(createPayload);
+                      const newAttendee = await storage.createAttendee(createPayload);
+                      // Stamp billableAt if event has status selection configured and this attendee matches
+                      const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+                      if (selectedStatuses && selectedStatuses.length > 0 && newAttendee) {
+                        const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+                        if (status && selectedStatuses.includes(status)) {
+                          await storage.updateAttendee(newAttendee.id, { billableAt: new Date() } as any);
+                        }
+                      }
                     }
                     savedCount++;
                   } catch (e) {
@@ -1857,6 +1876,7 @@ class SyncOrchestrator {
    */
   private transformCertainAttendee(rawData: any): {
     externalId: string;
+    externalProfileId?: string;
     firstName: string;
     lastName: string;
     email: string;
@@ -1870,11 +1890,13 @@ class SyncOrchestrator {
     const profile = rawData.profile || {};
     const statusLabel = rawData.registrationStatusLabel || '';
     const externalId = String(rawData.registrationCode || rawData.pkRegId || '');
+    const externalProfileId = String(rawData.externalProfileId || profile.externalId || profile.externalProfileId || '');
     // orderCode links guests to primary attendee - matches primary's externalId
     // For primary attendees, orderCode equals their own externalId
     const orderCode = String(rawData.orderCode || externalId);
     return {
       externalId,
+      externalProfileId: externalProfileId || null,
       firstName: profile.firstName || rawData.firstName || '',
       lastName: profile.lastName || rawData.lastName || '',
       email: profile.email || rawData.email || '',

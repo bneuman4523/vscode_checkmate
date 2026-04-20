@@ -153,6 +153,30 @@ export const assistantToolDeclarations: Tool[] = [
         },
       },
       {
+        name: "get_available_statuses",
+        description:
+          "Return the unique registration statuses found among attendees " +
+          "for this event, with counts, plus the currently selected statuses.",
+        parameters: { type: "OBJECT", properties: {} },
+      },
+      {
+        name: "set_attendee_statuses",
+        description:
+          "Set which registration statuses are included for this event. " +
+          "Only call this after the user has explicitly confirmed the selection.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            statuses: {
+              type: "ARRAY",
+              items: { type: "STRING" },
+              description: "List of status labels to include",
+            },
+          },
+          required: ["statuses"],
+        },
+      },
+      {
         name: "navigate_to",
         description:
           "Tell the client to navigate to a specific screen. " +

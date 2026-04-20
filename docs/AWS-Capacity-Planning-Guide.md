@@ -1,6 +1,6 @@
-# Checkmate — AWS Capacity Planning & Autoscaling Guide
+# Greet — AWS Capacity Planning & Autoscaling Guide
 
-This document provides the exact runtime specifications, resource consumption profiles, and scaling thresholds for Checkmate's AWS migration. It is intended for the DevOps and database teams to plan infrastructure, set autoscaling policies, and anticipate bottlenecks before production traffic arrives.
+This document provides the exact runtime specifications, resource consumption profiles, and scaling thresholds for Greet's AWS migration. It is intended for the DevOps and database teams to plan infrastructure, set autoscaling policies, and anticipate bottlenecks before production traffic arrives.
 
 > **Companion document:** See `AWS-Migration-Checklist.md` for Docker, infrastructure setup, and security configuration.
 

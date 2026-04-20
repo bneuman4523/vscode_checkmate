@@ -1,6 +1,6 @@
-# Checkmate — AWS Self-Hosted Migration Checklist
+# Greet — AWS Self-Hosted Migration Checklist
 
-This document covers everything needed to move Checkmate from Replit to a standalone AWS deployment, including Docker containerization, infrastructure, security, and estimated costs.
+This document covers everything needed to move Greet from Replit to a standalone AWS deployment, including Docker containerization, infrastructure, security, and estimated costs.
 
 ---
 

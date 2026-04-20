@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -56,7 +56,7 @@ import {
   Users,
   ClipboardList,
 } from "lucide-react";
-import type { EventConfigurationTemplate, BadgeTemplate, Printer, Event, WorkflowSnapshot, RegistrationStatus } from "@shared/schema";
+import type { EventConfigurationTemplate, BadgeTemplate, Printer, Event, WorkflowSnapshot } from "@shared/schema";
 import { registrationStatuses } from "@shared/schema";
 import { TemplateWorkflowEditor, emptyWorkflowSnapshot } from "@/components/workflow/TemplateWorkflowEditor";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -93,6 +93,21 @@ export default function ConfigurationTemplates() {
     enabled: !!customerId,
     select: (events) => events.filter(e => e.configStatus === "configured"),
   });
+
+  // Collect unique statuses from all configured events, fall back to hardcoded defaults
+  const availableStatuses = useMemo(() => {
+    const statusSet = new Set<string>();
+    for (const event of events) {
+      const selected = (event.syncSettings as any)?.selectedStatuses as string[] | undefined;
+      if (selected) {
+        for (const s of selected) statusSet.add(s);
+      }
+    }
+    if (statusSet.size === 0) {
+      for (const s of registrationStatuses) statusSet.add(s);
+    }
+    return Array.from(statusSet).sort();
+  }, [events]);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -190,6 +205,7 @@ export default function ConfigurationTemplates() {
         customerId={customerId}
         badgeTemplates={badgeTemplates}
         printers={printers}
+        availableStatuses={availableStatuses}
       />
 
       {editTemplate && (
@@ -200,6 +216,7 @@ export default function ConfigurationTemplates() {
           customerId={customerId}
           badgeTemplates={badgeTemplates}
           printers={printers}
+          availableStatuses={availableStatuses}
         />
       )}
 
@@ -340,12 +357,14 @@ function CreateTemplateDialog({
   customerId,
   badgeTemplates,
   printers,
+  availableStatuses,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   customerId: string;
   badgeTemplates: BadgeTemplate[];
   printers: Printer[];
+  availableStatuses: string[];
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -355,7 +374,7 @@ function CreateTemplateDialog({
   const [printerId, setPrinterId] = useState<string>("");
   const [isDefault, setIsDefault] = useState(false);
   const [staffEnabled, setStaffEnabled] = useState(true);
-  const [defaultStatusFilter, setDefaultStatusFilter] = useState<RegistrationStatus[]>([]);
+  const [defaultStatusFilter, setDefaultStatusFilter] = useState<string[]>([]);
   const [workflowSnapshot, setWorkflowSnapshot] = useState<WorkflowSnapshot>(emptyWorkflowSnapshot);
 
   const createMutation = useMutation({
@@ -481,7 +500,7 @@ function CreateTemplateDialog({
                     <p className="text-xs text-muted-foreground">Pre-filter check-in lists to these statuses by default</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {registrationStatuses.map((status) => {
+                    {availableStatuses.map((status) => {
                       const isActive = defaultStatusFilter.includes(status);
                       return (
                         <Button
@@ -567,6 +586,7 @@ function EditTemplateDialog({
   customerId,
   badgeTemplates,
   printers,
+  availableStatuses,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -574,6 +594,7 @@ function EditTemplateDialog({
   customerId: string;
   badgeTemplates: BadgeTemplate[];
   printers: Printer[];
+  availableStatuses: string[];
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -583,7 +604,7 @@ function EditTemplateDialog({
   const [printerId, setPrinterId] = useState(template.defaultPrinterId || "");
   const [isDefault, setIsDefault] = useState(template.isDefault);
   const [staffEnabled, setStaffEnabled] = useState(template.staffSettings?.enabled ?? true);
-  const [defaultStatusFilter, setDefaultStatusFilter] = useState<RegistrationStatus[]>(
+  const [defaultStatusFilter, setDefaultStatusFilter] = useState<string[]>(
     template.staffSettings?.defaultRegistrationStatusFilter || []
   );
   const [workflowSnapshot, setWorkflowSnapshot] = useState<WorkflowSnapshot>(
@@ -702,7 +723,7 @@ function EditTemplateDialog({
                     <p className="text-xs text-muted-foreground">Pre-filter check-in lists to these statuses by default</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    {registrationStatuses.map((status) => {
+                    {availableStatuses.map((status) => {
                       const isActive = defaultStatusFilter.includes(status);
                       return (
                         <Button

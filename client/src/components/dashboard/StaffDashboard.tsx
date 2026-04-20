@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useParams } from "wouter";
 import { Loader2, Users, Clock, Printer, Cloud } from "lucide-react";
 import KioskMode from "@/components/KioskMode";
@@ -18,11 +18,11 @@ import { DashboardHeader } from "./components/DashboardHeader";
 import { DashboardStats } from "./components/DashboardStats";
 import { AttendeeTab } from "./components/AttendeeTab";
 import { SessionTab } from "./components/SessionTab";
-import { 
-  CheckinDialog, 
-  EditAttendeeDialog, 
-  PrintPreviewDialog, 
-  WorkflowDialog, 
+import {
+  CheckinDialog,
+  EditAttendeeDialog,
+  PrintPreviewDialog,
+  WorkflowDialog,
   BadgePreviewDialog,
   AddAttendeeDialog,
 } from "./components/dialogs";
@@ -33,8 +33,11 @@ import PrinterOfflineAlert from "@/components/PrinterOfflineAlert";
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import { printOrchestrator } from "@/services/print-orchestrator";
 import type { Attendee, Session, EditFormData, PrintPreviewData } from "./types";
-import type { RegistrationStatus } from "@shared/schema";
 import { registrationStatuses } from "@shared/schema";
+import { useGroupCheckin } from "@/hooks/useGroupCheckin";
+import GroupCheckinCard from "@/components/group/GroupCheckinCard";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { getAuthHeaders } from "./utils";
 
 /**
  * Staff Dashboard - Composition Root
@@ -63,7 +66,7 @@ export default function StaffDashboard() {
   const [editFormData, setEditFormData] = useState<EditFormData>({ firstName: "", lastName: "", company: "", title: "" });
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<RegistrationStatus[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const statusFilterInitialized = useRef(false);
   const [sessionSearchTerm, setSessionSearchTerm] = useState("");
   const [attendeeScanMode, setAttendeeScanMode] = useState(false);
@@ -73,10 +76,14 @@ export default function StaffDashboard() {
   const [showBadgePreview, setShowBadgePreview] = useState(false);
   const [showAddWalkin, setShowAddWalkin] = useState(false);
   const [kioskActive, setKioskActive] = useState(false);
+  const [groupSheetOpen, setGroupSheetOpen] = useState(false);
+  const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
+  const [isGroupPrinting, setIsGroupPrinting] = useState(false);
 
   const qc = useQueryClient();
   const staffPrinter = usePrinter({ eventId: eventId || '', mode: 'staff' });
   const networkPrint = useNetworkPrint();
+  const groupCheckin = useGroupCheckin({ eventId: eventId || '', mode: 'staff', getStaffAuthHeaders: getAuthHeaders });
 
   const handleStaffIdleTimeout = useCallback(async () => {
     try {
@@ -96,6 +103,28 @@ export default function StaffDashboard() {
   useBackNavigationGuard(isAuthenticated);
 
   const queries = useStaffQueries(eventId, isAuthenticated, selectedSession?.id);
+  const isGroupCheckinEnabled = Boolean((queries.event?.tempStaffSettings as any)?.groupCheckinEnabled);
+
+  // Pre-filter attendees by the event's selected statuses (from sync config)
+  const selectedStatuses = queries.event?.syncSettings?.selectedStatuses;
+
+  const includedAttendees = useMemo(() => {
+    if (!selectedStatuses || selectedStatuses.length === 0) {
+      return queries.attendees;
+    }
+    return queries.attendees.filter(a => {
+      const status = a.registrationStatusLabel || a.registrationStatus || '';
+      return selectedStatuses.includes(status);
+    });
+  }, [queries.attendees, selectedStatuses]);
+
+  // Determine which statuses to show as filter buttons
+  const availableStatuses = useMemo(() => {
+    if (selectedStatuses && selectedStatuses.length > 0) {
+      return selectedStatuses;
+    }
+    return [...registrationStatuses];
+  }, [selectedStatuses]);
 
   const handlePrintPreview = useCallback((data: PrintPreviewData) => {
     setPrintPreviewData(data);
@@ -130,7 +159,7 @@ export default function StaffDashboard() {
   }, [queries.event]);
 
   const { filteredAttendees, checkedInCount, badgePrintedCount } = useAttendeeFilters(
-    queries.attendees,
+    includedAttendees,
     searchTerm,
     statusFilter
   );
@@ -156,9 +185,49 @@ export default function StaffDashboard() {
     setShowCheckinDialog(true);
   }, []);
 
-  const handleCheckinClick = useCallback((attendee: Attendee) => {
+  const openGroupSheet = useCallback(async (orderCode: string, scannedId?: string): Promise<boolean> => {
+    try {
+      // Peek at member count first via staff endpoint
+      const res = await fetch(`/api/staff/group/${encodeURIComponent(orderCode)}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (!data.found || !data.members || data.members.length <= 1) return false;
+
+      // Multi-member group — populate hook state
+      const found = await groupCheckin.lookupGroup(orderCode);
+      if (found) {
+        setGroupScannedMemberId(scannedId || null);
+        setGroupSheetOpen(true);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [groupCheckin]);
+
+  const handleGroupConfirm = useCallback(async () => {
+    try {
+      const result = await groupCheckin.checkInSelected();
+      qc.invalidateQueries({ queryKey: ['/api/staff/attendees'] });
+      queries.refetchAttendees();
+      setGroupSheetOpen(false);
+      groupCheckin.reset();
+    } catch (err) {
+      console.error("[StaffDashboard] Group check-in failed:", err);
+    }
+  }, [groupCheckin, qc, queries]);
+
+  const handleCheckinClick = useCallback(async (attendee: Attendee) => {
+    // Try group check-in first if enabled
+    if (isGroupCheckinEnabled && (attendee as any).orderCode) {
+      const isGroup = await openGroupSheet((attendee as any).orderCode, attendee.id);
+      if (isGroup) return;
+    }
     workflowActions.handleCheckinClick(attendee, () => setShowCheckinDialog(false));
-  }, [workflowActions]);
+  }, [workflowActions, isGroupCheckinEnabled, openGroupSheet]);
 
   const handleSessionSelect = useCallback((session: Session) => {
     setSelectedSession(session);
@@ -355,7 +424,7 @@ export default function StaffDashboard() {
 
       <main className="p-4 max-w-4xl mx-auto">
         <DashboardStats
-          totalAttendees={queries.attendees.length}
+          totalAttendees={includedAttendees.length}
           checkedInCount={checkedInCount}
           badgePrintedCount={badgePrintedCount}
           sessionsCount={queries.sessions.length}
@@ -375,12 +444,13 @@ export default function StaffDashboard() {
 
           <TabsContent value="event-checkin" className="space-y-4">
             <AttendeeTab
-              attendees={queries.attendees}
+              attendees={includedAttendees}
               filteredAttendees={filteredAttendees}
               searchTerm={searchTerm}
               onSearchChange={setSearchTerm}
               statusFilter={statusFilter}
               onStatusFilterChange={setStatusFilter}
+              availableStatuses={availableStatuses}
               scanMode={attendeeScanMode}
               onToggleScanMode={() => setAttendeeScanMode(!attendeeScanMode)}
               isLoading={queries.attendeesLoading}
@@ -394,7 +464,13 @@ export default function StaffDashboard() {
               onEdit={handleEditClick}
               onPrint={(id) => mutations.badgePrintedMutation.mutate(id)}
               onViewDetails={handleViewDetails}
-              onQRScanFound={setSelectedAttendee}
+              onQRScanFound={async (attendee: Attendee) => {
+                if (isGroupCheckinEnabled && (attendee as any).orderCode) {
+                  const isGroup = await openGroupSheet((attendee as any).orderCode, attendee.id);
+                  if (isGroup) return;
+                }
+                setSelectedAttendee(attendee);
+              }}
               onAddWalkin={() => setShowAddWalkin(true)}
             />
           </TabsContent>
@@ -500,8 +576,47 @@ export default function StaffDashboard() {
           });
         }}
         isSubmitting={mutations.addWalkinMutation.isPending}
-        participantTypes={[...new Set(queries.attendees.map(a => a.participantType).filter(Boolean))]}
+        participantTypes={Array.from(new Set(queries.attendees.map(a => a.participantType).filter(Boolean)))}
       />
+
+      <Sheet open={groupSheetOpen} onOpenChange={(open) => {
+        if (!open) {
+          setGroupSheetOpen(false);
+          groupCheckin.reset();
+        }
+      }}>
+        <SheetContent className="w-[480px] sm:max-w-[480px]">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Group Check-In
+            </SheetTitle>
+            <SheetDescription>
+              Check in multiple attendees from the same group
+            </SheetDescription>
+          </SheetHeader>
+          <div className="mt-4">
+            {groupCheckin.isLookingUp ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : (
+              <GroupCheckinCard
+                members={groupCheckin.members}
+                primaryId={groupCheckin.primaryId}
+                selectedIds={groupCheckin.selectedIds}
+                onToggleMember={groupCheckin.toggleMember}
+                onSelectAll={groupCheckin.selectAll}
+                onDeselectAll={groupCheckin.deselectAll}
+                onConfirm={handleGroupConfirm}
+                mode="staff"
+                isProcessing={groupCheckin.isProcessing || isGroupPrinting}
+                scannedMemberId={groupScannedMemberId || undefined}
+              />
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <StaffFeedbackWidget
         staffName={session.staffName || "Staff"}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import QRCode from "qrcode";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,9 +28,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { 
-  Settings, 
-  Palette, 
+import {
+  Settings,
+  Palette,
   Bell,
   Trash2,
   Link2,
@@ -49,14 +50,21 @@ import {
   ListChecks,
   AlertTriangle,
   UserPlus,
-  UsersRound
+  UsersRound,
+  Upload,
+  Sun,
+  Moon,
+  ImageIcon,
+  Lock,
+  QrCode
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Event, CustomerIntegration, EventIntegration, Location } from "@shared/schema";
+import type { Event, CustomerIntegration, EventIntegration, Location, KioskBrandingConfig } from "@shared/schema";
 import { WorkflowConfigurator } from "./workflow/WorkflowConfigurator";
 import EventNotifications from "./EventNotifications";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useAuth } from "@/hooks/useAuth";
 import { Checkbox } from "@/components/ui/checkbox";
 
 interface EventSettingsProps {
@@ -77,6 +85,12 @@ const PROVIDER_VARIABLE_FIELDS: Record<string, Array<{ key: string; label: strin
   ],
 };
 
+interface DiscoveredStatusesResponse {
+  statuses: Array<{ label: string; count: number }>;
+  selectedStatuses: string[] | null;
+  statusesConfigured: boolean;
+}
+
 interface KioskWalkinConfig {
   enabledFields: string[];
   requiredFields: string[];
@@ -95,8 +109,19 @@ interface TempStaffSettings {
   allowWalkins: boolean;
   allowKioskFromStaff: boolean;
   allowGroupCheckin?: boolean;
+  groupDisclaimerMode?: 'group' | 'individual';
+  groupCheckinEnabled?: boolean;
   allowKioskWalkins?: boolean;
   kioskWalkinConfig?: KioskWalkinConfig;
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function EventSettings({ eventId }: EventSettingsProps) {
@@ -106,7 +131,9 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [editingVariables, setEditingVariables] = useState<Record<string, Record<string, string>>>({});
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const featureFlags = useFeatureFlags();
-  
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
   const [staffEnabled, setStaffEnabled] = useState(false);
   const [staffPasscode, setStaffPasscode] = useState("");
   const [staffStartTime, setStaffStartTime] = useState("");
@@ -114,6 +141,8 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [staffAllowWalkins, setStaffAllowWalkins] = useState(false);
   const [staffAllowKiosk, setStaffAllowKiosk] = useState(false);
   const [staffAllowGroupCheckin, setStaffAllowGroupCheckin] = useState(false);
+  const [groupDisclaimerMode, setGroupDisclaimerMode] = useState<'group' | 'individual'>('group');
+  const [groupCheckinEnabled, setGroupCheckinEnabled] = useState(false);
   const [kioskWalkinsEnabled, setKioskWalkinsEnabled] = useState(false);
   const [kioskWalkinConfig, setKioskWalkinConfig] = useState<KioskWalkinConfig>({
     enabledFields: ['firstName', 'lastName', 'email', 'participantType'],
@@ -125,6 +154,27 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [showCopiedMessage, setShowCopiedMessage] = useState(false);
   const [staffQrDataUrl, setStaffQrDataUrl] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState("access");
+
+  // Kiosk branding override state
+  const [brandingOverrideEnabled, setBrandingOverrideEnabled] = useState(false);
+  const [brandingLogoUrl, setBrandingLogoUrl] = useState<string | null>(null);
+  const [brandingBannerUrl, setBrandingBannerUrl] = useState<string | null>(null);
+  const [brandingKioskTheme, setBrandingKioskTheme] = useState<"light" | "dark">("light");
+  const [brandingInitialized, setBrandingInitialized] = useState(false);
+  const brandingLogoInputRef = useRef<HTMLInputElement>(null);
+  const brandingBannerInputRef = useRef<HTMLInputElement>(null);
+
+  // QR Code override state
+  const [qrOverrideEnabled, setQrOverrideEnabled] = useState(false);
+  const [qrEmbedType, setQrEmbedType] = useState<string>("externalId");
+  const [qrFields, setQrFields] = useState<string[]>([]);
+  const [qrSeparator, setQrSeparator] = useState("|");
+  const [qrIncludeLabel, setQrIncludeLabel] = useState(false);
+  const [qrInitialized, setQrInitialized] = useState(false);
+
+  // Attendee statuses state
+  const [localSelectedStatuses, setLocalSelectedStatuses] = useState<string[]>([]);
+  const [statusesInitialized, setStatusesInitialized] = useState(false);
 
   const { data: event, isLoading: eventLoading } = useQuery<Event>({
     queryKey: ["/api/events", eventId],
@@ -155,6 +205,43 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       return res.json();
     },
     enabled: !!event?.customerId,
+  });
+
+  const { data: discoveredStatusesData, isLoading: statusesLoading } = useQuery<DiscoveredStatusesResponse>({
+    queryKey: ["/api/events", eventId, "discovered-statuses"],
+    enabled: !!eventId,
+  });
+
+  // Initialize local statuses state from server data
+  useEffect(() => {
+    if (discoveredStatusesData && !statusesInitialized) {
+      setLocalSelectedStatuses(discoveredStatusesData.selectedStatuses || []);
+      setStatusesInitialized(true);
+    }
+  }, [discoveredStatusesData, statusesInitialized]);
+
+  const saveSelectedStatusesMutation = useMutation({
+    mutationFn: async (selectedStatuses: string[]) => {
+      const response = await apiRequest("PATCH", `/api/events/${eventId}/selected-statuses`, {
+        selectedStatuses,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "discovered-statuses"] });
+      setStatusesInitialized(false); // Allow re-init from fresh data
+      toast({
+        title: "Statuses updated",
+        description: "Attendee status selection has been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update statuses",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
   });
 
   const updateEventLocationMutation = useMutation({
@@ -287,12 +374,46 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       setStaffAllowWalkins(tempStaffSettings.allowWalkins || false);
       setStaffAllowKiosk(tempStaffSettings.allowKioskFromStaff || false);
       setStaffAllowGroupCheckin(tempStaffSettings.allowGroupCheckin || false);
+      setGroupDisclaimerMode(tempStaffSettings.groupDisclaimerMode || 'group');
+      setGroupCheckinEnabled(tempStaffSettings.groupCheckinEnabled || false);
       setKioskWalkinsEnabled(tempStaffSettings.allowKioskWalkins || false);
       if (tempStaffSettings.kioskWalkinConfig) {
         setKioskWalkinConfig(tempStaffSettings.kioskWalkinConfig);
       }
     }
   }, [tempStaffSettings, eventTimezone, utcToEventTzInput]);
+
+  // Initialize branding override state from event data
+  useEffect(() => {
+    if (event && !brandingInitialized) {
+      const override = (event as any).kioskBrandingOverride as (KioskBrandingConfig & { enabled: boolean }) | null | undefined;
+      if (override) {
+        setBrandingOverrideEnabled(override.enabled ?? false);
+        setBrandingLogoUrl(override.logoUrl ?? null);
+        setBrandingBannerUrl(override.bannerUrl ?? null);
+        setBrandingKioskTheme(override.kioskTheme ?? "light");
+      }
+      setBrandingInitialized(true);
+    }
+  }, [event, brandingInitialized]);
+
+  // Initialize QR code override state from event data
+  useEffect(() => {
+    if (event && !qrInitialized) {
+      const badgeSettings = (event as any).badgeSettings as { qrCodeConfigOverride?: { embedType: string; fields: string[]; separator?: string; includeLabel?: boolean } | null } | null;
+      const override = badgeSettings?.qrCodeConfigOverride;
+      if (override) {
+        setQrOverrideEnabled(true);
+        setQrEmbedType(override.embedType || "externalId");
+        setQrFields(override.fields || []);
+        setQrSeparator(override.separator || "|");
+        setQrIncludeLabel(override.includeLabel || false);
+      } else {
+        setQrOverrideEnabled(false);
+      }
+      setQrInitialized(true);
+    }
+  }, [event, qrInitialized]);
 
   const addEventIntegrationMutation = useMutation({
     mutationFn: async (integrationId: string) => {
@@ -433,6 +554,104 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     },
   });
 
+  const updateBrandingOverrideMutation = useMutation({
+    mutationFn: async (branding: KioskBrandingConfig & { enabled: boolean }) => {
+      const response = await apiRequest("PATCH", `/api/events/${eventId}`, {
+        kioskBrandingOverride: branding,
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+      setBrandingInitialized(false); // Allow re-init from fresh data
+      toast({
+        title: "Branding updated",
+        description: "Event kiosk branding override has been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update branding",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSaveBrandingOverride = () => {
+    updateBrandingOverrideMutation.mutate({
+      enabled: brandingOverrideEnabled,
+      logoUrl: brandingLogoUrl || null,
+      bannerUrl: brandingBannerUrl || null,
+      kioskTheme: brandingKioskTheme,
+    });
+  };
+
+  const updateQrCodeOverrideMutation = useMutation({
+    mutationFn: async (qrCodeConfigOverride: { embedType: string; fields: string[]; separator?: string; includeLabel?: boolean } | null) => {
+      const existingBadgeSettings = (event as any)?.badgeSettings || {};
+      const response = await apiRequest("PATCH", `/api/events/${eventId}`, {
+        badgeSettings: { ...existingBadgeSettings, qrCodeConfigOverride },
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+      setQrInitialized(false);
+      toast({
+        title: "QR code settings updated",
+        description: "Event QR code override has been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update QR settings",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSaveQrCodeOverride = () => {
+    if (qrOverrideEnabled) {
+      updateQrCodeOverrideMutation.mutate({
+        embedType: qrEmbedType,
+        fields: qrFields,
+        separator: qrSeparator,
+        includeLabel: qrIncludeLabel,
+      });
+    } else {
+      updateQrCodeOverrideMutation.mutate(null);
+    }
+  };
+
+  const handleBrandingImageUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    setter: (url: string | null) => void,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      toast({ variant: "destructive", title: "Invalid file", description: "Please select an image file." });
+      return;
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      toast({ variant: "destructive", title: "File too large", description: "Maximum file size is 2MB." });
+      return;
+    }
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setter(dataUrl);
+    } catch {
+      toast({ variant: "destructive", title: "Upload failed", description: "Could not read the image file." });
+    }
+
+    e.target.value = "";
+  };
+
   const handleSaveTempStaffSettings = () => {
     // Validate passcode minimum length
     if (staffPasscode && staffPasscode.length < 4) {
@@ -444,11 +663,13 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       return;
     }
     
-    const settings: { enabled?: boolean; passcode?: string; startTime?: string; endTime?: string; allowWalkins?: boolean; allowKioskFromStaff?: boolean; allowGroupCheckin?: boolean; allowKioskWalkins?: boolean; kioskWalkinConfig?: KioskWalkinConfig } = {
+    const settings: { enabled?: boolean; passcode?: string; startTime?: string; endTime?: string; allowWalkins?: boolean; allowKioskFromStaff?: boolean; allowGroupCheckin?: boolean; groupDisclaimerMode?: 'group' | 'individual'; groupCheckinEnabled?: boolean; allowKioskWalkins?: boolean; kioskWalkinConfig?: KioskWalkinConfig } = {
       enabled: staffEnabled,
       allowWalkins: staffAllowWalkins,
       allowKioskFromStaff: staffAllowKiosk,
       allowGroupCheckin: staffAllowGroupCheckin,
+      groupDisclaimerMode: groupDisclaimerMode,
+      groupCheckinEnabled: groupCheckinEnabled,
       allowKioskWalkins: kioskWalkinsEnabled,
       kioskWalkinConfig: kioskWalkinsEnabled ? kioskWalkinConfig : undefined,
     };
@@ -521,10 +742,15 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     belowLine?: boolean;
   };
 
+  const statusesConfiguredStatus = discoveredStatusesData?.statusesConfigured ? "configured" as const : "needs-setup" as const;
+
   const navItems: SettingsNavItem[] = [
     { id: "access", label: "Access", icon: Shield, status: accessStatus },
+    { id: "statuses", label: "Attendee Statuses", icon: Users, status: statusesConfiguredStatus },
     { id: "workflow", label: "Check-in Workflow", icon: ListChecks, status: "configured" },
     { id: "notifications", label: "Notifications", icon: Bell, status: "configured" },
+    { id: "branding", label: "Kiosk Branding", icon: Palette, status: brandingOverrideEnabled ? "configured" : "needs-setup" },
+    { id: "qrcode", label: "QR Code", icon: QrCode, status: qrOverrideEnabled ? "configured" : "needs-setup" },
     { id: "danger", label: "Danger Zone", icon: Trash2, status: "danger" },
   ];
 
@@ -793,24 +1019,77 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
                 />
               </div>
 
-              {featureFlags.groupCheckin && (
-                <div className="flex items-center justify-between rounded-lg border p-3">
-                  <div className="space-y-0.5">
-                    <Label className="text-sm font-medium flex items-center gap-2">
-                      <UsersRound className="h-4 w-4" />
-                      Group Check-in
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Allow staff to check in multiple attendees at once from the same party or group
-                    </p>
+              <div className="rounded-lg border p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="text-sm font-medium flex items-center gap-2">
+                        <UsersRound className="h-4 w-4" />
+                        Group Check-in
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Allow staff to check in multiple attendees at once from the same party or group
+                      </p>
+                    </div>
+                    <Switch
+                      checked={staffAllowGroupCheckin}
+                      onCheckedChange={(checked) => {
+                        setStaffAllowGroupCheckin(checked);
+                        if (checked) {
+                          setGroupCheckinEnabled(true);
+                        } else {
+                          setGroupCheckinEnabled(false);
+                        }
+                      }}
+                      data-testid="switch-allow-group-checkin"
+                    />
                   </div>
-                  <Switch
-                    checked={staffAllowGroupCheckin}
-                    onCheckedChange={setStaffAllowGroupCheckin}
-                    data-testid="switch-allow-group-checkin"
-                  />
+
+                  {staffAllowGroupCheckin && (
+                    <div className="ml-4 pl-4 border-l-2 border-muted space-y-2">
+                      <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        Disclaimer Handling
+                      </Label>
+                      <RadioGroup
+                        value={groupDisclaimerMode}
+                        onValueChange={(value) => setGroupDisclaimerMode(value as 'group' | 'individual')}
+                        className="space-y-2"
+                      >
+                        <Label
+                          htmlFor="disclaimer-mode-group"
+                          className={`flex items-start gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                            groupDisclaimerMode === "group"
+                              ? "border-primary bg-primary/5"
+                              : "border-muted hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          <RadioGroupItem value="group" id="disclaimer-mode-group" className="mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="text-sm font-medium">Primary signs for group</span>
+                            <p className="text-xs text-muted-foreground">
+                              Fast mode. Group leader acknowledges on behalf of everyone.
+                            </p>
+                          </div>
+                        </Label>
+                        <Label
+                          htmlFor="disclaimer-mode-individual"
+                          className={`flex items-start gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                            groupDisclaimerMode === "individual"
+                              ? "border-primary bg-primary/5"
+                              : "border-muted hover:border-muted-foreground/30"
+                          }`}
+                        >
+                          <RadioGroupItem value="individual" id="disclaimer-mode-individual" className="mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="text-sm font-medium">Each member signs individually</span>
+                            <p className="text-xs text-muted-foreground">
+                              Compliance mode. Each person must sign separately.
+                            </p>
+                          </div>
+                        </Label>
+                      </RadioGroup>
+                    </div>
+                  )}
                 </div>
-              )}
 
               {featureFlags.kioskWalkinRegistration && (
                 <div className="rounded-lg border p-3 space-y-3">
@@ -1002,6 +1281,134 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       </Card>
         </div>}
 
+        {activeSection === "statuses" && <div>
+          <Card data-testid="card-attendee-statuses">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                Attendee Statuses
+              </CardTitle>
+              <CardDescription>
+                Select which attendee statuses to include for this event
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {statusesLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              ) : !discoveredStatusesData || discoveredStatusesData.statuses.length === 0 ? (
+                <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 p-4">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0" />
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    Sync attendees first to discover available statuses
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Select All / Deselect All */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const allLabels = discoveredStatusesData.statuses.map(s => s.label);
+                        setLocalSelectedStatuses(allLabels);
+                      }}
+                      data-testid="button-select-all-statuses"
+                    >
+                      Select All
+                    </Button>
+                    {isSuperAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setLocalSelectedStatuses([])}
+                        data-testid="button-deselect-all-statuses"
+                      >
+                        Deselect All
+                      </Button>
+                    )}
+                  </div>
+
+                  {/* Status checkboxes */}
+                  <div className="space-y-2">
+                    {discoveredStatusesData.statuses.map((status) => {
+                      const isSelected = localSelectedStatuses.includes(status.label);
+                      const wasPreviouslySaved = (discoveredStatusesData.selectedStatuses || []).includes(status.label);
+                      const isLocked = !isSuperAdmin && wasPreviouslySaved;
+
+                      return (
+                        <div
+                          key={status.label}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border p-3 transition-colors",
+                            isSelected ? "bg-primary/5 border-primary/20" : "bg-background",
+                            isLocked && "opacity-80"
+                          )}
+                        >
+                          <Checkbox
+                            id={`status-${status.label}`}
+                            checked={isSelected}
+                            disabled={isLocked}
+                            onCheckedChange={(checked) => {
+                              if (isLocked) return;
+                              if (checked) {
+                                setLocalSelectedStatuses(prev => [...prev, status.label]);
+                              } else {
+                                setLocalSelectedStatuses(prev => prev.filter(s => s !== status.label));
+                              }
+                            }}
+                            data-testid={`checkbox-status-${status.label}`}
+                          />
+                          <label
+                            htmlFor={`status-${status.label}`}
+                            className={cn(
+                              "flex-1 text-sm font-medium cursor-pointer",
+                              isLocked && "cursor-default"
+                            )}
+                          >
+                            {status.label}
+                          </label>
+                          <Badge variant="secondary" className="text-xs tabular-nums">
+                            {status.count.toLocaleString()}
+                          </Badge>
+                          {isLocked && (
+                            <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Summary line */}
+                  <p className="text-sm text-muted-foreground">
+                    {localSelectedStatuses.length} of {discoveredStatusesData.statuses.length} statuses selected
+                    {" "}
+                    ({discoveredStatusesData.statuses
+                      .filter(s => localSelectedStatuses.includes(s.label))
+                      .reduce((sum, s) => sum + s.count, 0)
+                      .toLocaleString()} attendees included)
+                  </p>
+
+                  {/* Save button */}
+                  <div className="flex justify-end pt-2 border-t">
+                    <Button
+                      onClick={() => saveSelectedStatusesMutation.mutate(localSelectedStatuses)}
+                      disabled={saveSelectedStatusesMutation.isPending || localSelectedStatuses.length === 0}
+                      data-testid="button-save-statuses"
+                    >
+                      {saveSelectedStatusesMutation.isPending ? "Saving..." : "Save Statuses"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>}
+
         {activeSection === "workflow" && <div>
           <WorkflowConfigurator eventId={eventId} />
         </div>}
@@ -1017,6 +1424,363 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
             </CardHeader>
             <CardContent>
               <EventNotifications eventId={eventId} />
+            </CardContent>
+          </Card>
+        </div>}
+
+        {activeSection === "branding" && <div>
+          <Card data-testid="card-branding-override">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Palette className="h-4 w-4" />
+                    Kiosk Branding
+                  </CardTitle>
+                  <CardDescription>
+                    Override account-level branding for this event's kiosk screens
+                  </CardDescription>
+                </div>
+                <Switch
+                  checked={brandingOverrideEnabled}
+                  onCheckedChange={setBrandingOverrideEnabled}
+                  data-testid="switch-branding-override"
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!brandingOverrideEnabled && (
+                <p className="text-sm text-muted-foreground">
+                  Using account default branding. Toggle the switch above to override branding for this event.
+                </p>
+              )}
+
+              {brandingOverrideEnabled && (
+                <>
+                  {/* Logo upload */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium flex items-center gap-1.5">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      Logo
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Square or horizontal logo for the kiosk header. Recommended: 200x60px. Max 2MB.
+                    </p>
+                    {brandingLogoUrl ? (
+                      <div className="space-y-2">
+                        <div className="rounded-lg border bg-muted/30 p-4 flex items-center justify-center">
+                          <img
+                            src={brandingLogoUrl}
+                            alt="Logo preview"
+                            className="max-h-16 max-w-full object-contain"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => brandingLogoInputRef.current?.click()}
+                          >
+                            <Upload className="h-3.5 w-3.5 mr-1.5" />
+                            Replace
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setBrandingLogoUrl(null)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        className="rounded-lg border-2 border-dashed border-muted-foreground/20 hover:border-muted-foreground/40 cursor-pointer transition-colors flex flex-col items-center justify-center py-6"
+                        onClick={() => brandingLogoInputRef.current?.click()}
+                      >
+                        <Upload className="h-6 w-6 text-muted-foreground/40 mb-1.5" />
+                        <span className="text-sm text-muted-foreground">Click to upload logo</span>
+                        <span className="text-xs text-muted-foreground/60 mt-0.5">PNG, JPG, or SVG up to 2MB</span>
+                      </div>
+                    )}
+                    <input
+                      ref={brandingLogoInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleBrandingImageUpload(e, setBrandingLogoUrl)}
+                      className="hidden"
+                    />
+                  </div>
+
+                  {/* Banner upload */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium flex items-center gap-1.5">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      Banner
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Wide banner for the top of the kiosk screen. Recommended: 800x200px. Max 2MB.
+                    </p>
+                    {brandingBannerUrl ? (
+                      <div className="space-y-2">
+                        <div className="rounded-lg border bg-muted/30 p-4 flex items-center justify-center">
+                          <img
+                            src={brandingBannerUrl}
+                            alt="Banner preview"
+                            className="max-h-24 max-w-full object-contain"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => brandingBannerInputRef.current?.click()}
+                          >
+                            <Upload className="h-3.5 w-3.5 mr-1.5" />
+                            Replace
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setBrandingBannerUrl(null)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        className="rounded-lg border-2 border-dashed border-muted-foreground/20 hover:border-muted-foreground/40 cursor-pointer transition-colors flex flex-col items-center justify-center py-6"
+                        onClick={() => brandingBannerInputRef.current?.click()}
+                      >
+                        <Upload className="h-6 w-6 text-muted-foreground/40 mb-1.5" />
+                        <span className="text-sm text-muted-foreground">Click to upload banner</span>
+                        <span className="text-xs text-muted-foreground/60 mt-0.5">PNG, JPG, or SVG up to 2MB</span>
+                      </div>
+                    )}
+                    <input
+                      ref={brandingBannerInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleBrandingImageUpload(e, setBrandingBannerUrl)}
+                      className="hidden"
+                    />
+                  </div>
+
+                  {/* Theme selection */}
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Kiosk Theme</Label>
+                    <RadioGroup
+                      value={brandingKioskTheme}
+                      onValueChange={(value) => setBrandingKioskTheme(value as "light" | "dark")}
+                      className="grid grid-cols-2 gap-3"
+                    >
+                      <Label
+                        htmlFor="branding-theme-light"
+                        className={`flex items-center gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                          brandingKioskTheme === "light"
+                            ? "border-primary bg-primary/5"
+                            : "border-muted hover:border-muted-foreground/30"
+                        }`}
+                      >
+                        <RadioGroupItem value="light" id="branding-theme-light" />
+                        <Sun className="h-4 w-4" />
+                        <span className="text-sm font-medium">Light</span>
+                      </Label>
+                      <Label
+                        htmlFor="branding-theme-dark"
+                        className={`flex items-center gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                          brandingKioskTheme === "dark"
+                            ? "border-primary bg-primary/5"
+                            : "border-muted hover:border-muted-foreground/30"
+                        }`}
+                      >
+                        <RadioGroupItem value="dark" id="branding-theme-dark" />
+                        <Moon className="h-4 w-4" />
+                        <span className="text-sm font-medium">Dark</span>
+                      </Label>
+                    </RadioGroup>
+                  </div>
+
+                  <div className="flex justify-end pt-2 border-t">
+                    <Button
+                      onClick={handleSaveBrandingOverride}
+                      disabled={updateBrandingOverrideMutation.isPending}
+                      data-testid="button-save-branding"
+                    >
+                      {updateBrandingOverrideMutation.isPending ? "Saving..." : "Save Branding"}
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {!brandingOverrideEnabled && (event as any)?.kioskBrandingOverride?.enabled && (
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-amber-600">
+                    Branding override was previously enabled. Save to switch back to account defaults.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleSaveBrandingOverride}
+                    disabled={updateBrandingOverrideMutation.isPending}
+                    data-testid="button-disable-branding"
+                  >
+                    {updateBrandingOverrideMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>}
+
+        {activeSection === "qrcode" && <div>
+          <Card data-testid="card-qr-code-override">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <QrCode className="h-4 w-4" />
+                    QR Code Override
+                  </CardTitle>
+                  <CardDescription>
+                    Override the badge template's QR code content for this event
+                  </CardDescription>
+                </div>
+                <Switch
+                  checked={qrOverrideEnabled}
+                  onCheckedChange={setQrOverrideEnabled}
+                  data-testid="switch-qr-override"
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!qrOverrideEnabled && (
+                <p className="text-sm text-muted-foreground">
+                  Using badge template default.
+                </p>
+              )}
+
+              {qrOverrideEnabled && (
+                <>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Embed Type</Label>
+                    <Select
+                      value={qrEmbedType}
+                      onValueChange={(value) => {
+                        setQrEmbedType(value);
+                        // Reset fields when switching to single-field types
+                        if (value === "externalId" || value === "externalProfileId") {
+                          setQrFields([]);
+                        }
+                      }}
+                    >
+                      <SelectTrigger data-testid="select-qr-embed-type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="externalId">Registration Code</SelectItem>
+                        <SelectItem value="externalProfileId">External Profile ID</SelectItem>
+                        <SelectItem value="simple">Simple (with separator)</SelectItem>
+                        <SelectItem value="json">JSON Format</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {(qrEmbedType === "simple" || qrEmbedType === "json" || qrEmbedType === "custom") && (
+                    <>
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Fields to Include</Label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { value: "externalId", label: "Registration Code" },
+                            { value: "externalProfileId", label: "External Profile ID" },
+                            { value: "firstName", label: "First Name" },
+                            { value: "lastName", label: "Last Name" },
+                            { value: "email", label: "Email" },
+                            { value: "company", label: "Company" },
+                            { value: "title", label: "Job Title" },
+                            { value: "participantType", label: "Attendee Type" },
+                          ].map(field => (
+                            <div key={field.value} className="flex items-center gap-2">
+                              <Checkbox
+                                id={`qr-field-${field.value}`}
+                                checked={qrFields.includes(field.value)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setQrFields(prev => [...prev, field.value]);
+                                  } else {
+                                    setQrFields(prev => prev.filter(f => f !== field.value));
+                                  }
+                                }}
+                              />
+                              <label htmlFor={`qr-field-${field.value}`} className="text-sm">{field.label}</label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {(qrEmbedType === "simple" || qrEmbedType === "custom") && (
+                        <>
+                          <div className="space-y-2">
+                            <Label htmlFor="qrSeparator" className="text-sm font-medium">Separator</Label>
+                            <Input
+                              id="qrSeparator"
+                              value={qrSeparator}
+                              onChange={(e) => setQrSeparator(e.target.value)}
+                              placeholder="|"
+                              className="w-24"
+                              data-testid="input-qr-separator"
+                            />
+                          </div>
+
+                          <div className="flex items-center justify-between rounded-lg border p-3">
+                            <div className="space-y-0.5">
+                              <Label className="text-sm font-medium">Include Labels</Label>
+                              <p className="text-xs text-muted-foreground">
+                                Prefix each value with its field name
+                              </p>
+                            </div>
+                            <Switch
+                              checked={qrIncludeLabel}
+                              onCheckedChange={setQrIncludeLabel}
+                              data-testid="switch-qr-include-label"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  <div className="flex justify-end pt-2 border-t">
+                    <Button
+                      onClick={handleSaveQrCodeOverride}
+                      disabled={updateQrCodeOverrideMutation.isPending}
+                      data-testid="button-save-qr-override"
+                    >
+                      {updateQrCodeOverrideMutation.isPending ? "Saving..." : "Save QR Settings"}
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {!qrOverrideEnabled && (event as any)?.badgeSettings?.qrCodeConfigOverride && (
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-amber-600">
+                    QR code override was previously enabled. Save to switch back to template defaults.
+                  </p>
+                  <Button
+                    size="sm"
+                    onClick={handleSaveQrCodeOverride}
+                    disabled={updateQrCodeOverrideMutation.isPending}
+                    data-testid="button-disable-qr-override"
+                  >
+                    {updateQrCodeOverrideMutation.isPending ? "Saving..." : "Save"}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>}

@@ -84,7 +84,7 @@ class EmailService {
       </head>
       <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to Checkmate</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Welcome to Greet</h1>
         </div>
         <div style="background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; border: 1px solid #e5e7eb; border-top: none;">
           <p style="font-size: 16px; margin-bottom: 20px;">Hi ${name},</p>
@@ -97,7 +97,7 @@ class EmailService {
           <p style="font-size: 12px; color: #9ca3af; word-break: break-all;">${setupUrl}</p>
         </div>
         <div style="text-align: center; padding: 20px; color: #9ca3af; font-size: 12px;">
-          <p>Checkmate - Event Check-In Made Easy</p>
+          <p>Greet - Event Check-In Made Easy</p>
         </div>
       </body>
       </html>
@@ -106,7 +106,7 @@ class EmailService {
     const text = `
 Hi ${name},
 
-Your Checkmate account has been created. Please visit the following link to set your password:
+Your Greet account has been created. Please visit the following link to set your password:
 
 ${setupUrl}
 
@@ -114,12 +114,12 @@ This link will expire in 48 hours.
 
 If you didn't request this, you can safely ignore this email.
 
-- Checkmate Team
+- Greet Team
     `.trim();
 
     return this.sendEmail({
       to: email,
-      subject: 'Set up your Checkmate password',
+      subject: 'Set up your Greet password',
       html,
       text,
     });
@@ -152,7 +152,7 @@ If you didn't request this, you can safely ignore this email.
           <p style="font-size: 14px; color: #6b7280; margin-top: 20px;">This code will expire in 15 minutes. If you didn't request this, you can safely ignore this email.</p>
         </div>
         <div style="text-align: center; padding: 20px; color: #9ca3af; font-size: 12px;">
-          <p>Checkmate - Event Check-In Made Easy</p>
+          <p>Greet - Event Check-In Made Easy</p>
         </div>
       </body>
       </html>
@@ -169,12 +169,12 @@ This code will expire in 15 minutes.
 
 If you didn't request this, you can safely ignore this email.
 
-- Checkmate Team
+- Greet Team
     `.trim();
 
     return this.sendEmail({
       to: email,
-      subject: 'Your Checkmate password reset code',
+      subject: 'Your Greet password reset code',
       html,
       text,
     });
@@ -196,7 +196,7 @@ If you didn't request this, you can safely ignore this email.
       </head>
       <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Checkmate Login</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Greet Login</h1>
         </div>
         <div style="background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; border: 1px solid #e5e7eb; border-top: none;">
           <p>Hi ${name},</p>
@@ -208,7 +208,7 @@ If you didn't request this, you can safely ignore this email.
           <p style="color: #666; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
         </div>
         <p style="text-align: center; color: #999; font-size: 12px; margin-top: 20px;">
-          Checkmate - Event Registration & Check-In
+          Greet - Event Registration & Check-In
         </p>
       </body>
       </html>
@@ -217,18 +217,18 @@ If you didn't request this, you can safely ignore this email.
     const text = `
 Hi ${name},
 
-Your Checkmate login code is: ${code}
+Your Greet login code is: ${code}
 
 This code expires in 10 minutes.
 
 If you didn't request this code, you can safely ignore this email.
 
-- Checkmate Team
+- Greet Team
     `.trim();
 
     return this.sendEmail({
       to: email,
-      subject: 'Your Checkmate login code',
+      subject: 'Your Greet login code',
       html,
       text,
     });
@@ -260,14 +260,14 @@ If you didn't request this code, you can safely ignore this email.
         </div>
         <div style="background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; border: 1px solid #e5e7eb; border-top: none;">
           <p style="font-size: 16px; margin-bottom: 20px;">Hi ${safeName},</p>
-          <p style="font-size: 16px; margin-bottom: 20px;">The Checkmate team has responded to your ${typeLabel.toLowerCase()}${ticketRef ? ` (${ticketRef})` : ''}:</p>
+          <p style="font-size: 16px; margin-bottom: 20px;">The Greet team has responded to your ${typeLabel.toLowerCase()}${ticketRef ? ` (${ticketRef})` : ''}:</p>
           <div style="background: #fff; padding: 20px; border-radius: 8px; border-left: 4px solid #2FB36D; margin: 20px 0;">
             <p style="font-size: 15px; color: #1f2937; margin: 0; white-space: pre-wrap;">${safeResponseText}</p>
           </div>
-          <p style="font-size: 14px; color: #6b7280; margin-top: 20px;">You can view this update and continue the conversation in your Checkmate dashboard under "My Feedback".</p>
+          <p style="font-size: 14px; color: #6b7280; margin-top: 20px;">You can view this update and continue the conversation in your Greet dashboard under "My Feedback".</p>
         </div>
         <div style="text-align: center; padding: 20px; color: #9ca3af; font-size: 12px;">
-          <p>Checkmate - Event Check-In Made Easy</p>
+          <p>Greet - Event Check-In Made Easy</p>
         </div>
       </body>
       </html>
@@ -276,18 +276,18 @@ If you didn't request this code, you can safely ignore this email.
     const text = `
 Hi ${name},
 
-The Checkmate team has responded to your ${typeLabel.toLowerCase()}${ticketRef ? ` (${ticketRef})` : ''}:
+The Greet team has responded to your ${typeLabel.toLowerCase()}${ticketRef ? ` (${ticketRef})` : ''}:
 
 "${adminResponseText}"
 
-You can view this update in your Checkmate dashboard under "My Feedback".
+You can view this update in your Greet dashboard under "My Feedback".
 
-- Checkmate Team
+- Greet Team
     `.trim();
 
     return this.sendEmail({
       to: email,
-      subject: `Update on your ${typeLabel.toLowerCase()}${ticketRef ? ` ${ticketRef}` : ''} — Checkmate`,
+      subject: `Update on your ${typeLabel.toLowerCase()}${ticketRef ? ` ${ticketRef}` : ''} — Greet`,
       html,
       text,
     });

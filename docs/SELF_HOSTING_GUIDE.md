@@ -1,6 +1,6 @@
-# Checkmate Self-Hosting Guide
+# Greet Self-Hosting Guide
 
-This guide walks through deploying Checkmate on your own infrastructure using Docker.
+This guide walks through deploying Greet on your own infrastructure using Docker.
 
 ---
 
@@ -115,7 +115,7 @@ You should see `checkmate-db` with status `Up (healthy)`.
 
 ## Step 4: Run Database Migrations
 
-This creates all the tables Checkmate needs. You only need to run this once on initial setup, and again after code updates that include schema changes:
+This creates all the tables Greet needs. You only need to run this once on initial setup, and again after code updates that include schema changes:
 
 ```bash
 docker compose --profile migrate run --rm migrate
@@ -151,7 +151,7 @@ Should return `OK`.
 
 ## Step 6: Set Up HTTPS (Production)
 
-Checkmate should always run behind HTTPS in production. The simplest approach is using **Caddy** as a reverse proxy (it handles SSL certificates automatically):
+Greet should always run behind HTTPS in production. The simplest approach is using **Caddy** as a reverse proxy (it handles SSL certificates automatically):
 
 ### Option A: Caddy (easiest)
 
@@ -279,7 +279,7 @@ docker compose exec -T db psql -U checkmate checkmate < backup_20260311_120000.s
                     └──────┬──────┘
                            │ HTTP
                     ┌──────┴──────┐
-                    │  Checkmate  │  ← Node.js app
+                    │  Greet  │  ← Node.js app
                     │  (port 5000)│
                     └──────┬──────┘
                            │

@@ -35,15 +35,29 @@ export function useStaffQueries(
     };
   }, []);
 
-  const settingsQuery = useQuery<{ allowWalkins: boolean; printPreviewOnCheckin: boolean; allowKioskFromStaff: boolean }>({
-    queryKey: ['/api/staff/session/settings'],
+  interface StaffSessionResponse {
+    settings: { allowWalkins: boolean; printPreviewOnCheckin: boolean; allowKioskFromStaff: boolean };
+    event?: {
+      id: string;
+      name: string;
+      customerId: string;
+      syncSettings?: { selectedStatuses?: string[]; statusesConfigured?: boolean } | null;
+      tempStaffSettings?: { defaultRegistrationStatusFilter?: string[] } | null;
+    };
+  }
+
+  const sessionDataQuery = useQuery<StaffSessionResponse>({
+    queryKey: ['/api/staff/session/data'],
     queryFn: async () => {
       const response = await fetch('/api/staff/session', {
         headers: getAuthHeaders(),
       });
-      if (!response.ok) return { allowWalkins: false, printPreviewOnCheckin: false, allowKioskFromStaff: false };
+      if (!response.ok) return { settings: { allowWalkins: false, printPreviewOnCheckin: false, allowKioskFromStaff: false } };
       const data = await response.json();
-      return data.settings || { allowWalkins: false, printPreviewOnCheckin: false, allowKioskFromStaff: false };
+      return {
+        settings: data.settings || { allowWalkins: false, printPreviewOnCheckin: false, allowKioskFromStaff: false },
+        event: data.event || undefined,
+      };
     },
     enabled: isAuthenticated,
     staleTime: Infinity,
@@ -213,8 +227,9 @@ export function useStaffQueries(
   return {
     isOnline,
     offlineCachedCount,
-    allowWalkins: settingsQuery.data?.allowWalkins ?? false,
-    allowKioskFromStaff: settingsQuery.data?.allowKioskFromStaff ?? false,
+    allowWalkins: sessionDataQuery.data?.settings?.allowWalkins ?? false,
+    allowKioskFromStaff: sessionDataQuery.data?.settings?.allowKioskFromStaff ?? false,
+    event: sessionDataQuery.data?.event ?? null,
     workflowConfig: workflowQuery.data ?? null,
     hasActiveWorkflow,
     badgeTemplates: badgeTemplatesQuery.data ?? [],

@@ -1,7 +1,8 @@
 import { offlineDB, OfflineAttendee, OfflineEvent, OfflineBadgeTemplate } from '@/lib/offline-db';
+import type { KioskBrandingConfig } from '@shared/schema';
 
 export interface PreCacheProgress {
-  phase: 'attendees' | 'templates' | 'events' | 'complete';
+  phase: 'attendees' | 'templates' | 'events' | 'branding' | 'complete';
   current: number;
   total: number;
   message: string;
@@ -64,6 +65,34 @@ class KioskPreCacheService {
         current: 1,
         total: 1,
         message: 'Event data loaded',
+      });
+
+      // Cache branding (logo/banner are base64 data URLs, so storing the config is sufficient)
+      this.notifyProgress({
+        phase: 'branding',
+        current: 0,
+        total: 1,
+        message: 'Caching branding assets...',
+      });
+
+      try {
+        const launchInfoResponse = await fetch(`/api/kiosk/${eventId}/launch-info`);
+        if (launchInfoResponse.ok) {
+          const launchData = await launchInfoResponse.json();
+          if (launchData.branding) {
+            await offlineDB.saveAppState(`branding_${eventId}`, launchData.branding);
+          }
+        }
+      } catch (brandingError) {
+        // Branding cache is non-critical — log and continue
+        console.warn('[KioskPreCache] Branding cache failed (non-critical):', brandingError);
+      }
+
+      this.notifyProgress({
+        phase: 'branding',
+        current: 1,
+        total: 1,
+        message: 'Branding assets cached',
       });
 
       this.notifyProgress({
@@ -213,6 +242,7 @@ class KioskPreCacheService {
     
     const appStateDb = await (offlineDB as any).init();
     await appStateDb.delete('appState', `precache_${eventId}`);
+    await appStateDb.delete('appState', `branding_${eventId}`);
     
   }
 
@@ -226,6 +256,11 @@ class KioskPreCacheService {
 
   async getCachedEvent(eventId: string): Promise<OfflineEvent | undefined> {
     return offlineDB.getEvent(eventId);
+  }
+
+  async getCachedBranding(eventId: string): Promise<KioskBrandingConfig | null> {
+    const state = await offlineDB.getAppState(`branding_${eventId}`);
+    return state ? (state as KioskBrandingConfig) : null;
   }
 
   async searchCachedAttendees(

@@ -220,7 +220,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
   ];
 
   const qrEmbedFields = [
-    { value: "externalId", label: "External ID" },
+    { value: "externalId", label: "Registration Code" },
+    { value: "externalProfileId", label: "External Profile ID" },
     { value: "firstName", label: "First Name" },
     { value: "lastName", label: "Last Name" },
     { value: "email", label: "Email" },
@@ -230,7 +231,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
   ];
 
   const qrEmbedTypes = [
-    { value: "externalId", label: "External ID Only", description: "Just the external ID for quick scanning" },
+    { value: "externalId", label: "Registration Code", description: "Registration code for quick scanning (default)" },
+    { value: "externalProfileId", label: "External Profile ID", description: "Certain's external profile ID for third-party integrations" },
     { value: "simple", label: "Simple (with separator)", description: "Multiple fields joined by separator" },
     { value: "json", label: "JSON Format", description: "Structured JSON with field names" },
     { value: "custom", label: "Custom", description: "Custom field mapping with labels" },
@@ -546,8 +548,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                                 <Label htmlFor="back-qr-embed-type" className="text-xs">Embed Type</Label>
                                 <Select
                                   value={backSideQrCodeConfig.embedType}
-                                  onValueChange={(value: 'externalId' | 'simple' | 'json' | 'custom') => {
-                                    const newFields = value === 'externalId' ? ['externalId'] : backSideQrCodeConfig.fields;
+                                  onValueChange={(value: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom') => {
+                                    const newFields = value === 'externalId' ? ['externalId'] : value === 'externalProfileId' ? ['externalProfileId'] : backSideQrCodeConfig.fields;
                                     setBackSideQrCodeConfig({ ...backSideQrCodeConfig, embedType: value, fields: newFields });
                                   }}
                                 >
@@ -937,8 +939,8 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                     <Label htmlFor="qr-embed-type">Embed Type</Label>
                     <Select 
                       value={qrCodeConfig.embedType} 
-                      onValueChange={(value: 'externalId' | 'simple' | 'json' | 'custom') => {
-                        const newFields = value === 'externalId' ? ['externalId'] : qrCodeConfig.fields;
+                      onValueChange={(value: 'externalId' | 'externalProfileId' | 'simple' | 'json' | 'custom') => {
+                        const newFields = value === 'externalId' ? ['externalId'] : value === 'externalProfileId' ? ['externalProfileId'] : qrCodeConfig.fields;
                         setQrCodeConfig({ ...qrCodeConfig, embedType: value, fields: newFields });
                       }}
                     >
@@ -1447,7 +1449,7 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
               ))}
 
               {includeQR && (() => {
-                const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+                const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
                 const positions: Record<string, { x: number; y: number }> = {
                   'top-left': { x: 10, y: 10 },
                   'top-center': { x: (badgeWidthPx - qrSize) / 2, y: 10 },

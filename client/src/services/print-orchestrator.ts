@@ -198,6 +198,7 @@ class PrintOrchestrator {
       const getFieldValue = (fieldName: string): string => {
         switch (fieldName) {
           case 'externalId': return badgeData.externalId || badgeData.customFields?.externalId || '';
+          case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
           case 'firstName': return badgeData.firstName;
           case 'lastName': return badgeData.lastName;
           case 'email': return badgeData.customFields?.email || '';
@@ -218,6 +219,9 @@ class PrintOrchestrator {
       switch (qrCodeConfig.embedType) {
         case 'externalId':
           qrData = badgeData.externalId || badgeData.customFields?.externalId || `${badgeData.firstName}-${badgeData.lastName}-${Date.now()}`;
+          break;
+        case 'externalProfileId':
+          qrData = badgeData.customFields?.externalProfileId || badgeData.externalId || `${badgeData.firstName}-${badgeData.lastName}-${Date.now()}`;
           break;
         case 'simple':
           if (qrCodeConfig.includeLabel) {
@@ -255,7 +259,7 @@ class PrintOrchestrator {
 
       return await QRCode.toDataURL(qrData, {
         width: 300,
-        margin: 1,
+        margin: 2,
         errorCorrectionLevel: 'H',
         color: { dark: '#000000', light: '#FFFFFF' },
       });
@@ -617,7 +621,7 @@ class PrintOrchestrator {
     // Add QR code if enabled
     let qrCodeHTML = '';
     if (includeQR && badgeData.qrCode) {
-      const qrSize = Math.min(widthPx, heightPx) * 0.2; // 20% of smallest dimension
+      const qrSize = Math.min(widthPx, heightPx) * 0.3; // 30% of smallest dimension for reliable scanning
       let qrLeft = 0, qrTop = 0;
       
       switch (qrPosition) {
@@ -745,6 +749,7 @@ class PrintOrchestrator {
       case 'title': return badgeData.title || '';
       case 'participantType': return badgeData.participantType;
       case 'externalId': return badgeData.externalId || '';
+      case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
       case 'orderCode': return (badgeData as any).orderCode || badgeData.customFields?.orderCode || '';
       default:
         if (fieldName.startsWith('customField_')) {
@@ -820,7 +825,7 @@ class PrintOrchestrator {
     dpiScale: number
   ): Promise<void> {
     return new Promise((resolve) => {
-      const qrSize = Math.min(widthPx, panelHeightPx) * 0.2;
+      const qrSize = Math.min(widthPx, panelHeightPx) * 0.3;
       let qrLeft = 0, qrTop = 0;
 
       switch (qrPosition) {

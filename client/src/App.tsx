@@ -38,12 +38,13 @@ import ConfigurationTemplates from "@/pages/ConfigurationTemplates";
 import ErrorReport from "@/pages/ErrorReport";
 import AuditLog from "@/pages/AuditLog";
 import FeedbackDashboard from "@/pages/FeedbackDashboard";
-import AlphaFeedbackTracker from "@/pages/AlphaFeedbackTracker";
 import MissionControl from "@/pages/MissionControl";
 import MyFeedback from "@/pages/MyFeedback";
 import EventSetupGuide from "@/pages/EventSetupGuide";
 import AccountSetupGuide from "@/pages/AccountSetupGuide";
+import LicenseManagement from "@/pages/LicenseManagement";
 import DataRetention from "@/pages/DataRetention";
+import AccountBranding from "@/pages/AccountBranding";
 import { Button } from "@/components/ui/button";
 import { Building2, LogIn, LogOut, User, Menu, MoreVertical } from "lucide-react";
 import { useLocation } from "wouter";
@@ -81,7 +82,9 @@ function Router() {
       <Route path="/customers/:customerId/locations" component={Locations} />
       <Route path="/customers/:customerId/users" component={Users} />
       <Route path="/customers/:customerId/configurations" component={ConfigurationTemplates} />
+      <Route path="/customers/:customerId/license" component={LicenseManagement} />
       <Route path="/customers/:customerId/data-retention" component={DataRetention} />
+      <Route path="/customers/:customerId/branding" component={AccountBranding} />
       <Route path="/customers/:customerId/events/:eventId/reports" component={EventReports} />
       <Route path="/customers/:customerId/events/:eventId/:tab?" component={EventDashboard} />
       <Route path="/templates" component={Templates} />
@@ -97,7 +100,6 @@ function Router() {
       <Route path="/reset-password" component={ResetPassword} />
       <Route path="/errors" component={ErrorReport} />
       <Route path="/audit-log" component={AuditLog} />
-      <Route path="/alpha-feedback" component={AlphaFeedbackTracker} />
       <Route path="/mission-control" component={MissionControl} />
       <Route path="/feedback" component={FeedbackDashboard} />
       <Route path="/my-feedback" component={MyFeedback} />

@@ -17,7 +17,7 @@ const CERTAIN_REALTIME_CONFIG: RealtimeSyncConfig = {
   endpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}/{{externalId}}",
   walkinEndpointUrl: "/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}",
   walkinStatus: "Attended",
-  walkinSource: "Checkmate",
+  walkinSource: "Greet",
   checkinStatus: "Attended",
   revertStatus: "Registered",
   maxRetries: 3,

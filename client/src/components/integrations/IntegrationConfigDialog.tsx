@@ -1074,7 +1074,7 @@ function RealtimeTab({
                       ...realtimeSyncConfig,
                       walkinSource: e.target.value
                     })}
-                    placeholder="Checkmate"
+                    placeholder="Greet"
                     data-testid="input-walkin-source"
                     disabled={!syncSettingsEditable}
                     className={!syncSettingsEditable ? "bg-muted" : ""}
@@ -1174,7 +1174,7 @@ function RealtimeTab({
     "email": "...", "organization": "..."
   },
   "registrationStatusLabel": "${realtimeSyncConfig.walkinStatus || realtimeSyncConfig.checkinStatus || 'Checked In'}",
-  "source": "${realtimeSyncConfig.walkinSource || 'Checkmate'}",
+  "source": "${realtimeSyncConfig.walkinSource || 'Greet'}",
   "checkins": [{ ... }],
   "reg_categories": [{ "catCode": "..." }]
 }`}

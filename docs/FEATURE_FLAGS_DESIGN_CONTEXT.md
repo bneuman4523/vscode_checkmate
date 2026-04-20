@@ -1,7 +1,7 @@
 # Feature Flags Design Context
 
 **Source:** [Feature Flags: Transform Your Product Development Workflow](https://featureflagsbook.com/) by Ben Nadel (2024)
-**Purpose:** Reference guide for implementing feature flags in Checkmate as we move from beta to GA. Covers both account-level and super-admin-level flag strategies.
+**Purpose:** Reference guide for implementing feature flags in Greet as we move from beta to GA. Covers both account-level and super-admin-level flag strategies.
 **Added:** March 5, 2026
 
 ---
@@ -63,10 +63,10 @@ Targeting is deterministic — same rules + same inputs = same variant, always. 
 
 ---
 
-## Checkmate-Specific Application
+## Greet-Specific Application
 
 ### Current Premium Feature Flags (Already Implemented)
-Checkmate already has a basic feature flag system for premium features:
+Greet already has a basic feature flag system for premium features:
 - Badge flip preview
 - Giveaway tracking
 - Controlled by super admins on a per-event basis
@@ -119,7 +119,7 @@ Evaluation order: User override → Event rule → Account rule → Platform rul
 - Include flag context in API responses where needed
 
 ### Client-Side Consumption (SPA Considerations)
-- Since Checkmate is a React SPA, flag state can become stale during long sessions
+- Since Greet is a React SPA, flag state can become stale during long sessions
 - Options: poll for changes, use SSE/WebSocket for real-time updates, or refresh on navigation
 - Staff dashboard sessions can be long (8+ hours) — need a refresh strategy
 - Kiosk mode sessions are persistent — flags should auto-refresh periodically
@@ -148,7 +148,7 @@ Don't track which variant a user is seeing. Track what users DO (actions, conver
 ### Build vs. Buy
 - Feature flags are "deceptively simple" — the rules engine, admin UI, real-time propagation, multi-environment support, and audit trails add up fast
 - Consider: does building this give us a competitive advantage?
-- For Checkmate: start simple (DB-backed boolean flags), evaluate vendors (LaunchDarkly, Flagsmith, Unleash) if complexity grows
+- For Greet: start simple (DB-backed boolean flags), evaluate vendors (LaunchDarkly, Flagsmith, Unleash) if complexity grows
 
 ### Ownership Boundaries
 - Feature flag ownership should be clear — who created it, who maintains it, who cleans it up

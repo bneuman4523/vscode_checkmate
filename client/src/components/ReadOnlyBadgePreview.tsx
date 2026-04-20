@@ -70,7 +70,7 @@ export default function ReadOnlyBadgePreview({
     ? template.imageElements as ImageElement[] 
     : [];
 
-  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
   const qrMargin = 10;
   const qrPositions: Record<string, { x: number; y: number }> = {
     'top-left': { x: qrMargin, y: qrMargin },
@@ -307,7 +307,7 @@ export default function ReadOnlyBadgePreview({
                   );
                 })}
                 {template.includeQR && (() => {
-                  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+                  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
                   const pos = template.qrPosition || 'bottom-right';
                   const style: React.CSSProperties = {
                     position: 'absolute',
@@ -387,7 +387,7 @@ export default function ReadOnlyBadgePreview({
                   );
                 })}
                 {template.backSideIncludeQR && (() => {
-                  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.2;
+                  const qrSize = Math.min(badgeWidthPx, badgeHeightPx) * 0.3;
                   const pos = template.backSideQrPosition || 'bottom-right';
                   const style: React.CSSProperties = {
                     position: 'absolute',

@@ -233,6 +233,53 @@ export async function executeTool(
         };
       }
 
+      case "get_available_statuses": {
+        const attendees = await storage.getAttendees(eventId);
+        const counts = new Map<string, number>();
+        for (const a of attendees) {
+          const label = (a as any).registrationStatusLabel ?? (a as any).registrationStatus ?? "Unknown";
+          counts.set(label, (counts.get(label) ?? 0) + 1);
+        }
+
+        const event = await storage.getEvent(eventId);
+        const syncSettings = (event?.syncSettings as any) ?? {};
+        const selectedStatuses: string[] | null = syncSettings.selectedStatuses ?? null;
+        const statusesConfigured: boolean = !!syncSettings.statusesConfigured;
+
+        return {
+          success: true,
+          data: {
+            statuses: Array.from(counts.entries()).map(([label, count]) => ({ label, count })),
+            selectedStatuses,
+            statusesConfigured,
+          },
+        };
+      }
+
+      case "set_attendee_statuses": {
+        const statuses = args.statuses as string[] | undefined;
+        if (!Array.isArray(statuses) || statuses.length === 0) {
+          return { success: false, error: "statuses must be a non-empty array of strings" };
+        }
+
+        const event = await storage.getEvent(eventId);
+        const existing = (event?.syncSettings as any) ?? {};
+        const updated = {
+          ...existing,
+          selectedStatuses: statuses,
+          statusesConfigured: true,
+        };
+
+        await storage.updateEvent(eventId, { syncSettings: updated });
+
+        return {
+          success: true,
+          data: {
+            message: `Attendee statuses updated — ${statuses.length} status${statuses.length === 1 ? "" : "es"} selected`,
+          },
+        };
+      }
+
       case "navigate_to": {
         return {
           success: true,

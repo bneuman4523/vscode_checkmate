@@ -21,6 +21,19 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
+export function setupLocalAuth(app: Express) {
+  app.set("trust proxy", 1);
+  app.use(getSession());
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  passport.serializeUser((user: Express.User, cb) => {
+    const { access_token, ...safeUser } = user as any;
+    cb(null, safeUser);
+  });
+  passport.deserializeUser((user: Express.User, cb) => cb(null, user));
+}
+
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
@@ -32,10 +45,14 @@ export function getSession() {
   });
   
   // Determine cookie settings based on environment:
-  // - Development (Replit iframe): needs sameSite="none" + secure=true for cross-origin cookies
-  // - Production: use sameSite="lax" for better OIDC redirect compatibility
-  const isProduction = process.env.NODE_ENV === "production";
-  
+  // Cookie settings by environment:
+  // - development/staging: HTTP localhost, no HTTPS required
+  // - production: HTTPS required
+  // - Replit (other): cross-origin iframe needs sameSite="none" + secure=true
+  const env = process.env.NODE_ENV || "development";
+  const isLocal = env === "development" || env === "staging";
+  const isProduction = env === "production";
+
   return session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
@@ -43,8 +60,8 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
-      sameSite: isProduction ? "lax" : "none",
+      secure: isLocal ? false : true,
+      sameSite: isLocal ? "lax" : (isProduction ? "lax" : "none"),
       maxAge: sessionTtl,
     },
   });

@@ -30,11 +30,14 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
 
   const isInCustomerScope = location.startsWith("/customers/") && location !== "/customers";
 
+  const customerScopePreservingRoutes = ["/feedback"];
+
   useEffect(() => {
     const wasInCustomerScope = previousLocation.current.startsWith("/customers/") && previousLocation.current !== "/customers";
     const nowInCustomerScope = location.startsWith("/customers/") && location !== "/customers";
+    const isPreservingRoute = customerScopePreservingRoutes.some(r => location.startsWith(r));
     
-    if (wasInCustomerScope && !nowInCustomerScope) {
+    if (wasInCustomerScope && !nowInCustomerScope && !isPreservingRoute) {
       setSelectedCustomerState(null);
       setSelectedEventState(null);
       setImpersonatedCustomerId(null);

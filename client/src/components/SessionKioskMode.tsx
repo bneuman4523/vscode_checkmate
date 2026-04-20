@@ -28,7 +28,8 @@ import QRScanner from "./QRScanner";
 import { parseQrCode } from "@/lib/qr-parser";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
-import type { Attendee, Session } from "@shared/schema";
+import type { Attendee, Session, KioskBrandingConfig } from "@shared/schema";
+import KioskBrandingHeader from "@/components/KioskBrandingHeader";
 import type { KioskSettings } from "@/components/KioskLauncher";
 import { useIdleTimeout } from "@/hooks/useIdleTimeout";
 import { IdleTimeoutDialog } from "@/components/IdleTimeoutDialog";
@@ -115,6 +116,7 @@ export default function SessionKioskMode({
   const [logoTapCount, setLogoTapCount] = useState(0);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [scanMode, setScanMode] = useState<ScanMode>("self");
+  const [branding, setBranding] = useState<KioskBrandingConfig | null>(null);
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const intentionalExitRef = useRef(false);
   const { toast } = useToast();
@@ -135,6 +137,22 @@ export default function SessionKioskMode({
     queryFn: () => kioskFetch(`/api/kiosk/${eventId}/sessions/${sessionId}`),
     enabled: Boolean(sessionId && eventId),
     retry: false,
+  });
+
+  // Fetch branding from launch-info
+  useQuery({
+    queryKey: [`/api/kiosk/${eventId}/launch-info`, 'branding'],
+    queryFn: async () => {
+      const res = await fetch(`/api/kiosk/${eventId}/launch-info`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.branding) {
+        setBranding(data.branding as KioskBrandingConfig);
+      }
+      return data.branding || null;
+    },
+    enabled: Boolean(eventId),
+    staleTime: 5 * 60 * 1000,
   });
 
   const { data: attendees = [] } = useQuery<Attendee[]>({
@@ -503,18 +521,12 @@ export default function SessionKioskMode({
     <div className="h-screen bg-background flex flex-col overflow-hidden">
       <div className="flex-1 flex items-center justify-center p-4 overflow-y-auto">
         <div className="w-full max-w-2xl my-auto">
-          <div className="text-center mb-4 sm:mb-6 md:mb-8">
-            <div 
-              className="inline-flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full bg-primary mb-3 sm:mb-4 cursor-pointer select-none"
-              onClick={handleLogoTap}
-              data-testid="session-kiosk-logo"
-            >
-              <Calendar className="h-8 w-8 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl sm:text-3xl md:text-4xl font-semibold mb-2" data-testid="text-session-name">
-              {session?.name || eventName || "Session Check-In"}
-            </h1>
-            
+          <KioskBrandingHeader
+            branding={branding}
+            eventName={session?.name || eventName || "Session Check-In"}
+            onLogoTap={handleLogoTap}
+            fallbackIcon={<Calendar className="h-8 w-8 text-primary-foreground" />}
+          >
             {session && (
               <div className="mt-3 flex flex-wrap items-center justify-center gap-3">
                 {session.location && (
@@ -531,7 +543,7 @@ export default function SessionKioskMode({
                   </Badge>
                 )}
                 {session.capacity && (
-                  <Badge 
+                  <Badge
                     variant={currentCheckedInCount >= session.capacity ? "destructive" : "secondary"}
                     data-testid="badge-session-capacity"
                   >
@@ -547,7 +559,7 @@ export default function SessionKioskMode({
                 )}
               </div>
             )}
-          </div>
+          </KioskBrandingHeader>
 
           <Card className="border-2">
             <CardContent className="p-6 sm:p-8 md:p-12">
