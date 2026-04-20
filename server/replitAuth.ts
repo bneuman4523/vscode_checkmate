@@ -45,10 +45,13 @@ export function getSession() {
   });
   
   // Determine cookie settings based on environment:
-  // - Development (Replit iframe): needs sameSite="none" + secure=true for cross-origin cookies
-  // - Production: use sameSite="lax" for better OIDC redirect compatibility
-  const isProduction = process.env.NODE_ENV === "production";
-  const isDev = process.env.NODE_ENV === "development";
+  // Cookie settings by environment:
+  // - development/staging: HTTP localhost, no HTTPS required
+  // - production: HTTPS required
+  // - Replit (other): cross-origin iframe needs sameSite="none" + secure=true
+  const env = process.env.NODE_ENV || "development";
+  const isLocal = env === "development" || env === "staging";
+  const isProduction = env === "production";
 
   return session({
     secret: process.env.SESSION_SECRET!,
@@ -57,8 +60,8 @@ export function getSession() {
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: isDev ? false : true,
-      sameSite: isDev ? "lax" : (isProduction ? "lax" : "none"),
+      secure: isLocal ? false : true,
+      sameSite: isLocal ? "lax" : (isProduction ? "lax" : "none"),
       maxAge: sessionTtl,
     },
   });
