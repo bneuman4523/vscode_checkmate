@@ -27,6 +27,7 @@ import { createAssistantRouter } from "./assistant/route";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { registerLocalStorageRoutes } from "./services/local-storage";
 import { registerReportRoutes } from "./routes/reports";
+import { registerSyncInsightsRoutes } from "./routes/sync-insights";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
 
@@ -231,7 +232,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Register report routes (must be after authMiddleware so req.dbUser is populated)
   registerReportRoutes(app);
-  
+
+  // Register sync insights routes (super_admin + admin)
+  registerSyncInsightsRoutes(app);
+
   // =====================
   // Auth Routes
   // =====================
@@ -6063,6 +6067,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Mark as syncing
       await storage.updateEventSyncState(syncState.id, { syncStatus: 'syncing' });
 
+      // Create a sync job record for reporting
+      const jobTypeMap: Record<string, string> = {
+        attendees: 'event_attendee_sync',
+        sessions: 'event_session_sync',
+        session_registrations: 'event_session_registration_sync',
+      };
+      const syncJob = await storage.createSyncJob({
+        integrationId: integration.id,
+        eventId,
+        eventSyncStateId: syncState.id,
+        jobType: jobTypeMap[dataType] || 'event_attendee_sync',
+        syncTier: dataType === 'session_registrations' ? 'event_dependent' : 'event_data',
+        triggerType: 'manual',
+        priority: 1,
+        status: 'running',
+        startedAt: new Date(),
+        attempts: 1,
+      });
+
       // Get credentials and build auth headers
       const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
       const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
@@ -6175,7 +6198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             attendeeEndpoint,
             syncState.lastSyncTimestamp
           );
-          
+
           let endpointPath = finalEndpoint;
           try {
             const pathUrl = new URL(finalEndpoint);
@@ -6184,7 +6207,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Not a full URL, use as-is
           }
           endpointPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-          const url = `${baseUrl}${endpointPath}`;
+          let url = `${baseUrl}${endpointPath}`;
+
+          // Apply incremental filter for subsequent syncs
+          url = orchestratorForUrl.applyIncrementalFilter(url, integration.providerId, dataType, syncState.lastSyncTimestamp);
           
           try {
             const callStart = Date.now();
@@ -6273,9 +6299,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Not a full URL, use as-is
         }
         endpointPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-        const url = `${baseUrl}${endpointPath}`;
+        let url = `${baseUrl}${endpointPath}`;
+
+        // Apply incremental filter (dateModified_after) for subsequent syncs
+        url = orchestratorForUrl.applyIncrementalFilter(url, integration.providerId, dataType, syncState.lastSyncTimestamp);
 
         logger.info(`Syncing ${dataType} from: ${url}`);
+
+        // Save the request URL to the job for debugging
+        if (syncJob) {
+          await storage.updateSyncJob(syncJob.id, {
+            payload: { requestUrl: url, dataType, eventId, incremental: !!syncState.lastSyncTimestamp },
+          });
+        }
 
         // Make the API call
         const response = await fetch(url, {
@@ -6424,9 +6460,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         logger.info(`Attendee processing complete: ${createdCount} created, ${updatedCount} updated, ${processErrorCount} errors`);
       }
 
-      // Update sync state with result — format as yyyy/MM/dd HH:mm:ss for Certain API compatibility
+      // Update sync state with result — only advance timestamp if records were returned
       const now = new Date();
-      const serverTimestamp = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
+      const serverTimestamp = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}T${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
       const defaultSyncSettings = (integration.defaultSyncSettings as any) || {};
       const nextSyncAt = syncOrchestrator.calculateNextSyncTime(
         { startDate: event.startDate, endDate: event.endDate },
@@ -6438,10 +6474,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const hasPartialFailure = totalErrors > 0;
       const finalSyncStatus = hasPartialFailure ? 'partial' : 'success';
       
-      await storage.updateEventSyncState(syncState.id, { 
+      await storage.updateEventSyncState(syncState.id, {
         syncStatus: finalSyncStatus,
         lastSyncAt: new Date(),
-        lastSyncTimestamp: hasPartialFailure ? syncState.lastSyncTimestamp : serverTimestamp,
+        lastSyncTimestamp: (hasPartialFailure || records.length === 0) ? syncState.lastSyncTimestamp : serverTimestamp,
         consecutiveFailures: hasPartialFailure ? (syncState.consecutiveFailures || 0) : 0,
         lastErrorMessage: hasPartialFailure ? `${totalErrors} errors during sync` : null,
         nextSyncAt,
@@ -6453,6 +6489,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           durationMs: Date.now() - startTime,
         },
       });
+
+      // Update sync job record for reporting
+      if (syncJob) {
+        await storage.updateSyncJob(syncJob.id, {
+          status: hasPartialFailure ? 'completed' : 'completed',
+          completedAt: new Date(),
+          processedRecords: records.length,
+          createdRecords: createdCount,
+          updatedRecords: updatedCount,
+          failedRecords: totalErrors,
+          errorMessage: hasPartialFailure ? `${totalErrors} errors during sync` : null,
+          result: {
+            processedCount: records.length,
+            createdCount,
+            updatedCount,
+            errorCount: totalErrors,
+            durationMs: Date.now() - startTime,
+            apiCallCount,
+            lastSyncTimestamp: syncState.lastSyncTimestamp,
+            incrementalFilter: !!syncState.lastSyncTimestamp,
+          },
+        });
+      }
 
       let responseMessage: string;
       if (dataType === 'attendees' && (createdCount > 0 || updatedCount > 0)) {
@@ -6488,7 +6547,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (stateErr) {
         logger.error({ err: stateErr }, 'Failed to update sync state after error');
       }
-      res.status(500).json({ 
+      // Update sync job record on failure
+      try {
+        if (typeof syncJob !== 'undefined' && syncJob) {
+          await storage.updateSyncJob(syncJob.id, {
+            status: 'failed',
+            completedAt: new Date(),
+            errorMessage: error.message || `Failed to sync ${req.params.dataType}`,
+            errorStack: error.stack,
+          });
+        }
+      } catch (jobErr) {
+        logger.error({ err: jobErr }, 'Failed to update sync job after error');
+      }
+      res.status(500).json({
         success: false, 
         message: error.message || `Failed to sync ${req.params.dataType}`,
         latencyMs: Date.now() - startTime,

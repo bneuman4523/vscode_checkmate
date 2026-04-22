@@ -1,7 +1,14 @@
 import { createChildLogger } from '../logger';
 import { storage } from "../storage";
 import { syncOrchestrator } from "./sync-orchestrator";
-import type { IntegrationEndpointConfig, SyncJob } from "@shared/schema";
+import { resolveAuthHeaders } from "./auth-resolver";
+import {
+  calculateNextSyncAt,
+  calculateSyncPriority,
+  areDependenciesMet,
+  type SyncDataType,
+} from "./adaptive-schedule";
+import type { IntegrationEndpointConfig, SyncJob, EventSyncState, Event } from "@shared/schema";
 
 const logger = createChildLogger('SyncScheduler');
 
@@ -35,10 +42,13 @@ export class SyncScheduler {
     this.isRunning = true;
 
     await this.recoverStaleJobs();
-    
+
+    // Backfill sync states for all integrations (handles pre-tiered-sync events)
+    await this.backfillAllSyncStates();
+
     // Initial poll
     await this.poll();
-    
+
     // Schedule recurring polls
     this.schedulePoll();
   }
@@ -61,8 +71,8 @@ export class SyncScheduler {
     // Wait for running jobs to complete
     if (this.runningJobs.size > 0) {
       logger.info(`Waiting for ${this.runningJobs.size} running jobs to complete...`);
-      
-      const timeout = new Promise<void>((resolve) => 
+
+      const timeout = new Promise<void>((resolve) =>
         setTimeout(() => {
           logger.info('Shutdown timeout reached, force stopping');
           resolve();
@@ -87,19 +97,26 @@ export class SyncScheduler {
     }, this.config.pollIntervalMs);
   }
 
+  // ─── Poll: three-tier orchestration ─────────────────────────────────────────
+
   private async poll(): Promise<void> {
     if (!this.isRunning) return;
 
     try {
-      // Check for configs that are due for sync
-      await this.checkDueEndpointConfigs();
-      
-      // Process pending sync jobs
+      // Tier 1: Account-level event discovery
+      await this.checkDueEventDiscoveries();
+
+      // Tier 2+3: Per-event data syncs (attendees, sessions, session_registrations)
+      await this.checkDueEventSyncs();
+
+      // Execute pending jobs from the queue
       await this.processPendingJobs();
     } catch (error) {
       logger.error({ err: error }, 'Poll error');
     }
   }
+
+  // ─── Stale job recovery ────────────────────────────────────────────────────
 
   private async recoverStaleJobs(): Promise<void> {
     try {
@@ -131,41 +148,184 @@ export class SyncScheduler {
     }
   }
 
-  private async checkDueEndpointConfigs(): Promise<void> {
+  // ─── Tier 1: Event Discovery ─────────────────────────────────────────────
+
+  /**
+   * Check endpoint configs where dataType = 'events' and create event_discovery jobs.
+   * This is the account-level tier -- discovers which events exist on the external platform.
+   */
+  private async checkDueEventDiscoveries(): Promise<void> {
     try {
       const dueConfigs = await storage.getEndpointConfigsDueForSync();
-      
+
       for (const config of dueConfigs) {
+        // Only process event-discovery configs in this tier
+        if (config.dataType !== 'events') {
+          continue;
+        }
+
         // Check if we're within the sync window
         if (!this.isWithinSyncWindow(config)) {
+          logger.debug(`Skipping event discovery for config ${config.id} — outside sync window`);
           continue;
         }
 
         // Check if job already exists for this config
         const existingJobs = await this.getActiveJobsForConfig(config.id);
         if (existingJobs.length > 0) {
+          logger.debug(`Skipping event discovery for config ${config.id} — active job exists`);
           continue;
         }
 
-        // Create a new scheduled sync job with appropriate job type based on dataType
-        const jobType = config.dataType === 'events' ? 'event_sync' : 'attendee_sync';
-        if (process.env.NODE_ENV !== 'production') {
-          logger.info(`Creating scheduled ${jobType} job for endpoint config ${config.id}`);
-        }
-        
+        logger.info(`Creating event_discovery job for endpoint config ${config.id}`);
         await storage.createSyncJob({
           integrationId: config.integrationId,
           endpointConfigId: config.id,
-          jobType,
+          jobType: 'event_discovery',
+          syncTier: 'account_discovery',
           triggerType: 'scheduled',
           priority: 5,
           status: 'pending',
         });
       }
     } catch (error) {
-      logger.error({ err: error }, 'Error checking due endpoint configs');
+      logger.error({ err: error }, 'Error checking due event discoveries');
     }
   }
+
+  // ─── Tier 2+3: Per-Event Data Syncs ──────────────────────────────────────
+
+  /**
+   * Query event_sync_states where syncEnabled=true AND nextSyncAt <= now,
+   * then create per-event sync jobs for each due state.
+   */
+  private async checkDueEventSyncs(): Promise<void> {
+    try {
+      const dueStates = await storage.getSyncStatesDueForSync();
+
+      if (dueStates.length > 0) {
+        logger.debug(`Found ${dueStates.length} event sync state(s) due for sync`);
+      }
+
+      for (const state of dueStates) {
+        try {
+          await this.maybeCreateEventSyncJob(state);
+        } catch (error) {
+          // One failed state should not block others
+          logger.error(
+            { err: error, stateId: state.id, eventId: state.eventId, dataType: state.dataType },
+            'Error evaluating event sync state'
+          );
+        }
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Error checking due event syncs');
+    }
+  }
+
+  /**
+   * Evaluate a single EventSyncState and create a job if appropriate.
+   */
+  private async maybeCreateEventSyncJob(state: EventSyncState): Promise<void> {
+    // Load the event to check syncSettings and date info
+    const event = await storage.getEvent(state.eventId);
+    if (!event) {
+      logger.warn(`Event ${state.eventId} not found for sync state ${state.id} — skipping`);
+      return;
+    }
+
+    const syncSettings = event.syncSettings as {
+      syncFrozen?: boolean;
+      attendeeSyncEnabled?: boolean;
+      sessionSyncEnabled?: boolean;
+      sessionRegistrationSyncEnabled?: boolean;
+      postEventGracePeriodHours?: number;
+    } | null;
+
+    // Check if event sync is globally frozen
+    if (syncSettings?.syncFrozen) {
+      logger.debug(`Skipping frozen event ${state.eventId} (state ${state.id})`);
+      return;
+    }
+
+    // Check if this specific data type is disabled at the event level
+    if (state.dataType === 'attendees' && syncSettings?.attendeeSyncEnabled === false) {
+      logger.debug(`Attendee sync disabled for event ${state.eventId} — skipping`);
+      return;
+    }
+    if (state.dataType === 'sessions' && syncSettings?.sessionSyncEnabled === false) {
+      logger.debug(`Session sync disabled for event ${state.eventId} — skipping`);
+      return;
+    }
+    if (state.dataType === 'session_registrations' && syncSettings?.sessionRegistrationSyncEnabled === false) {
+      logger.debug(`Session registration sync disabled for event ${state.eventId} — skipping`);
+      return;
+    }
+
+    // Check if an active job already exists for this state
+    const activeJobs = await storage.getActiveJobsByEventSyncState(state.id);
+    if (activeJobs.length > 0) {
+      logger.debug(`Skipping state ${state.id} — active job already exists (${activeJobs[0].id})`);
+      return;
+    }
+
+    // For session_registrations: check that dependencies (attendees + sessions) have been synced
+    if (state.dataType === 'session_registrations') {
+      const attendeeState = await storage.getEventSyncState(state.eventId, 'attendees');
+      const sessionState = await storage.getEventSyncState(state.eventId, 'sessions');
+
+      const deps = areDependenciesMet(
+        attendeeState?.lastSyncAt ?? null,
+        sessionState?.lastSyncAt ?? null
+      );
+
+      if (!deps.met) {
+        logger.debug(
+          `Skipping session_registrations for event ${state.eventId} — ${deps.reason}`
+        );
+        return;
+      }
+    }
+
+    // Calculate priority based on event proximity
+    const priority = calculateSyncPriority({
+      startDate: event.startDate ?? null,
+      endDate: event.endDate ?? null,
+    });
+
+    // Map dataType to job type
+    const jobType = this.dataTypeToJobType(state.dataType);
+    const syncTier = state.dataType === 'session_registrations' ? 'event_dependent' : 'event_data';
+
+    logger.info(
+      `Creating ${jobType} job for event ${state.eventId} (state ${state.id}, priority ${priority})`
+    );
+
+    await storage.createSyncJob({
+      integrationId: state.integrationId,
+      eventId: state.eventId,
+      eventSyncStateId: state.id,
+      jobType,
+      syncTier,
+      triggerType: 'scheduled',
+      priority,
+      status: 'pending',
+    });
+  }
+
+  /**
+   * Map a sync state dataType to the corresponding job type.
+   */
+  private dataTypeToJobType(dataType: string): string {
+    switch (dataType) {
+      case 'attendees': return 'event_attendee_sync';
+      case 'sessions': return 'event_session_sync';
+      case 'session_registrations': return 'event_session_registration_sync';
+      default: return `event_${dataType}_sync`;
+    }
+  }
+
+  // ─── Shared helpers ──────────────────────────────────────────────────────
 
   private isWithinSyncWindow(config: IntegrationEndpointConfig): boolean {
     if (!config.syncWindowStart || !config.syncWindowEnd) {
@@ -174,7 +334,7 @@ export class SyncScheduler {
 
     const now = new Date();
     const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-    
+
     // Simple time comparison (assumes same timezone)
     if (config.syncWindowStart <= config.syncWindowEnd) {
       // Normal window (e.g., 08:00 to 22:00)
@@ -188,6 +348,8 @@ export class SyncScheduler {
   private async getActiveJobsForConfig(configId: string): Promise<SyncJob[]> {
     return storage.getPendingSyncJobsByConfig(configId);
   }
+
+  // ─── Job processing ──────────────────────────────────────────────────────
 
   private async processPendingJobs(): Promise<void> {
     // Check how many jobs are currently running
@@ -218,12 +380,10 @@ export class SyncScheduler {
   }
 
   private async processJob(job: SyncJob): Promise<void> {
-    if (process.env.NODE_ENV !== 'production') {
-      logger.info(`Processing job ${job.id} (type: ${job.jobType}, trigger: ${job.triggerType})`);
-    }
+    logger.info(`Processing job ${job.id} (type: ${job.jobType}, trigger: ${job.triggerType})`);
 
     const startedAt = new Date();
-    
+
     try {
       // Mark job as running
       await storage.updateSyncJob(job.id, {
@@ -232,22 +392,30 @@ export class SyncScheduler {
         attempts: (job.attempts || 0) + 1,
       });
 
-      // Get integration and endpoint config
-      const integration = await storage.getCustomerIntegration(job.integrationId);
-      if (!integration) {
-        throw new Error(`Integration ${job.integrationId} not found`);
-      }
-
       // Execute the sync based on job type
       let result: SyncResult;
-      
+
       switch (job.jobType) {
+        // ── Legacy job types (backward compatible) ──
         case 'attendee_sync':
-          result = await this.executeAttendeeSync(job, integration);
+          result = await this.executeAttendeeSync(job);
           break;
         case 'event_sync':
-          result = await this.executeEventSync(job, integration);
+          result = await this.executeEventSync(job);
           break;
+
+        // ── Tier 1: Event discovery ──
+        case 'event_discovery':
+          result = await this.executeEventSync(job);
+          break;
+
+        // ── Tier 2+3: Per-event data syncs ──
+        case 'event_attendee_sync':
+        case 'event_session_sync':
+        case 'event_session_registration_sync':
+          result = await this.executePerEventSync(job);
+          break;
+
         default:
           throw new Error(`Unknown job type: ${job.jobType}`);
       }
@@ -265,7 +433,7 @@ export class SyncScheduler {
         result: result as any,
       });
 
-      // Update endpoint config sync status
+      // Update endpoint config sync status (for discovery / legacy jobs)
       if (job.endpointConfigId) {
         await storage.updateEndpointConfigSyncStatus(
           job.endpointConfigId,
@@ -275,7 +443,9 @@ export class SyncScheduler {
         );
       }
 
-      logger.info(`Job ${job.id} completed. Processed: ${result.processedRecords}, Created: ${result.createdRecords}, Updated: ${result.updatedRecords}`);
+      logger.info(
+        `Job ${job.id} completed. Processed: ${result.processedRecords}, Created: ${result.createdRecords}, Updated: ${result.updatedRecords}`
+      );
 
     } catch (error) {
       logger.error({ err: error }, `Job ${job.id} failed`);
@@ -286,7 +456,7 @@ export class SyncScheduler {
       // Check if we should retry
       const attempts = (job.attempts || 0) + 1;
       const maxAttempts = job.maxAttempts || 3;
-      
+
       if (attempts < maxAttempts) {
         // Schedule retry with exponential backoff
         const backoffMs = Math.min(
@@ -323,15 +493,37 @@ export class SyncScheduler {
           );
         }
 
+        // Update event sync state on final failure
+        if (job.eventSyncStateId) {
+          try {
+            const syncState = await storage.getEventSyncStateById(job.eventSyncStateId);
+            await storage.updateEventSyncState(job.eventSyncStateId, {
+              syncStatus: 'error',
+              lastErrorMessage: errorMessage,
+              lastErrorAt: new Date(),
+              consecutiveFailures: (syncState?.consecutiveFailures ?? 0) + 1,
+            });
+          } catch (stateErr) {
+            logger.error({ err: stateErr }, `Failed to update sync state ${job.eventSyncStateId} after job failure`);
+          }
+        }
+
         logger.info(`Job ${job.id} moved to dead letter queue after ${attempts} attempts`);
       }
     }
   }
 
-  private async executeAttendeeSync(job: SyncJob, integration: any): Promise<SyncResult> {
+  // ─── Legacy: Attendee sync (all events for an integration) ───────────────
+
+  private async executeAttendeeSync(job: SyncJob): Promise<SyncResult> {
+    const integration = await storage.getCustomerIntegration(job.integrationId);
+    if (!integration) {
+      throw new Error(`Integration ${job.integrationId} not found`);
+    }
+
     // Get event code mappings for this integration
     const eventCodeMappings = await storage.getEventCodeMappings(job.integrationId);
-    
+
     if (eventCodeMappings.length === 0) {
       logger.info(`No event code mappings found for integration ${job.integrationId}`);
       return {
@@ -354,9 +546,7 @@ export class SyncScheduler {
         const event = await storage.getEvent(mapping.eventId);
         const syncSettings = event?.syncSettings as { syncFrozen?: boolean; syncIntervalMinutes?: number | null } | null;
         if (syncSettings?.syncFrozen) {
-          if (process.env.NODE_ENV !== 'production') {
-            logger.info(`Skipping frozen event ${mapping.eventId}`);
-          }
+          logger.debug(`Skipping frozen event ${mapping.eventId}`);
           totalSkipped++;
           continue;
         }
@@ -367,10 +557,8 @@ export class SyncScheduler {
             const intervalMs = syncSettings.syncIntervalMinutes * 60 * 1000;
             const timeSinceLastSync = Date.now() - new Date(attendeeSyncState.lastSyncAt).getTime();
             if (timeSinceLastSync < intervalMs) {
-              if (process.env.NODE_ENV !== 'production') {
-                const minsRemaining = Math.round((intervalMs - timeSinceLastSync) / 60000);
-                logger.info(`Skipping event ${mapping.eventId} — custom interval ${syncSettings.syncIntervalMinutes}m, next sync in ~${minsRemaining}m`);
-              }
+              const minsRemaining = Math.round((intervalMs - timeSinceLastSync) / 60000);
+              logger.debug(`Skipping event ${mapping.eventId} — custom interval ${syncSettings.syncIntervalMinutes}m, next sync in ~${minsRemaining}m`);
               totalSkipped++;
               continue;
             }
@@ -383,8 +571,8 @@ export class SyncScheduler {
         });
 
         totalProcessed += result.processedCount;
-        totalCreated += result.createdCount || 0;
-        totalUpdated += result.updatedCount || 0;
+        totalCreated += (result as any).createdCount || 0;
+        totalUpdated += (result as any).updatedCount || 0;
         totalFailed += result.failedCount;
       } catch (error) {
         logger.error({ err: error }, `Error syncing mapping ${mapping.id}`);
@@ -401,12 +589,19 @@ export class SyncScheduler {
     };
   }
 
-  private async executeEventSync(job: SyncJob, integration: any): Promise<SyncResult> {
+  // ─── Legacy / Tier 1: Event discovery ────────────────────────────────────
+
+  private async executeEventSync(job: SyncJob): Promise<SyncResult> {
+    const integration = await storage.getCustomerIntegration(job.integrationId);
+    if (!integration) {
+      throw new Error(`Integration ${job.integrationId} not found`);
+    }
+
     // Get the endpoint config for events
-    const endpointConfig = job.endpointConfigId 
+    const endpointConfig = job.endpointConfigId
       ? await storage.getIntegrationEndpointConfigById(job.endpointConfigId)
       : await storage.getIntegrationEndpointConfig(job.integrationId, 'events');
-    
+
     if (!endpointConfig) {
       logger.info(`No events endpoint config found for integration ${job.integrationId}`);
       return {
@@ -424,6 +619,13 @@ export class SyncScheduler {
         endpointConfig,
       });
 
+      // After successful event discovery, ensure sync states exist for all events
+      try {
+        await this.backfillSyncStatesForIntegration(job.integrationId);
+      } catch (backfillErr) {
+        logger.error({ err: backfillErr }, `Sync state backfill failed for integration ${job.integrationId} (discovery still succeeded)`);
+      }
+
       return {
         processedRecords: result.processedCount,
         createdRecords: result.createdCount,
@@ -436,6 +638,345 @@ export class SyncScheduler {
       throw error;
     }
   }
+
+  // ─── Tier 2+3: Per-event data sync ──────────────────────────────────────
+
+  /**
+   * Execute a sync for ONE event + ONE data type.
+   * Used by event_attendee_sync, event_session_sync, event_session_registration_sync.
+   */
+  private async executePerEventSync(job: SyncJob): Promise<SyncResult> {
+    const syncStartTime = Date.now();
+
+    // Validate required fields
+    if (!job.eventId) {
+      throw new Error(`Per-event sync job ${job.id} is missing eventId`);
+    }
+    if (!job.eventSyncStateId) {
+      throw new Error(`Per-event sync job ${job.id} is missing eventSyncStateId`);
+    }
+
+    // Load event
+    const event = await storage.getEvent(job.eventId);
+    if (!event) {
+      throw new Error(`Event ${job.eventId} not found`);
+    }
+
+    // Load the sync state (for resolved endpoint, etc.)
+    const syncState = await storage.getEventSyncStateById(job.eventSyncStateId);
+    if (!syncState) {
+      throw new Error(`EventSyncState ${job.eventSyncStateId} not found`);
+    }
+
+    // Mark sync state as syncing
+    await storage.updateEventSyncState(syncState.id, {
+      syncStatus: 'syncing',
+    });
+
+    // Resolve auth headers via the shared auth resolver
+    const auth = await resolveAuthHeaders(job.integrationId);
+
+    let result: SyncResult;
+
+    try {
+      switch (job.jobType) {
+        case 'event_attendee_sync':
+          result = await this.executePerEventAttendeeSync(job, event, auth.integration, auth.headers, syncState);
+          break;
+        case 'event_session_sync':
+          result = await this.executePerEventSessionSync(job, event, auth.integration, auth.headers, syncState);
+          break;
+        case 'event_session_registration_sync':
+          result = await this.executePerEventSessionRegistrationSync(job, event, auth.integration, auth.headers, syncState);
+          break;
+        default:
+          throw new Error(`Unsupported per-event job type: ${job.jobType}`);
+      }
+    } catch (error) {
+      // Update sync state to error before re-throwing
+      const durationMs = Date.now() - syncStartTime;
+      await storage.updateEventSyncState(syncState.id, {
+        syncStatus: 'error',
+        lastErrorMessage: error instanceof Error ? error.message : 'Unknown error',
+        lastErrorAt: new Date(),
+        lastSyncDurationMs: durationMs,
+      });
+      throw error;
+    }
+
+    // Sync completed successfully -- update the sync state
+    const durationMs = Date.now() - syncStartTime;
+    const syncSettings = event.syncSettings as {
+      postEventGracePeriodHours?: number;
+    } | null;
+
+    const nextSyncAt = calculateNextSyncAt(
+      {
+        startDate: event.startDate ?? null,
+        endDate: event.endDate ?? null,
+        timezone: event.timezone ?? null,
+        postEventGracePeriodHours: syncSettings?.postEventGracePeriodHours,
+      },
+      syncState.dataType as SyncDataType,
+    );
+
+    await storage.updateEventSyncState(syncState.id, {
+      syncStatus: nextSyncAt ? 'success' : 'disabled',
+      lastSyncAt: new Date(),
+      nextSyncAt,
+      lastSyncDurationMs: durationMs,
+      consecutiveFailures: 0,
+      lastErrorMessage: null,
+      lastSyncResult: {
+        processedCount: result.processedRecords,
+        createdCount: result.createdRecords,
+        updatedCount: result.updatedRecords,
+        errorCount: result.failedRecords,
+        durationMs,
+      },
+      // Disable sync if event is past grace period
+      ...(nextSyncAt === null ? { syncEnabled: false } : {}),
+    });
+
+    if (nextSyncAt) {
+      logger.info(
+        `Sync state ${syncState.id} updated — next sync at ${nextSyncAt.toISOString()} (took ${durationMs}ms)`
+      );
+    } else {
+      logger.info(
+        `Sync state ${syncState.id} disabled — event past grace period (took ${durationMs}ms)`
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Sync attendees for a single event.
+   * Delegates to syncOrchestrator.syncSingleEventAttendees().
+   */
+  private async executePerEventAttendeeSync(
+    job: SyncJob,
+    event: Event,
+    integration: any,
+    authHeaders: Record<string, string>,
+    syncState: any,
+  ): Promise<SyncResult> {
+    const result = await syncOrchestrator.syncSingleEventAttendees({
+      integration,
+      event,
+      authHeaders,
+      syncState,
+    });
+
+    return {
+      processedRecords: result.processedCount,
+      createdRecords: result.createdCount,
+      updatedRecords: result.updatedCount,
+      skippedRecords: 0,
+      failedRecords: result.errorCount,
+    };
+  }
+
+  /**
+   * Sync sessions for a single event.
+   * Delegates to syncOrchestrator.syncSingleEventSessions().
+   */
+  private async executePerEventSessionSync(
+    job: SyncJob,
+    event: Event,
+    integration: any,
+    authHeaders: Record<string, string>,
+    syncState: any,
+  ): Promise<SyncResult> {
+    const result = await syncOrchestrator.syncSingleEventSessions({
+      integration,
+      event,
+      authHeaders,
+      syncState,
+    });
+
+    return {
+      processedRecords: result.processedCount,
+      createdRecords: result.createdCount,
+      updatedRecords: result.updatedCount,
+      skippedRecords: 0,
+      failedRecords: result.errorCount,
+    };
+  }
+
+  /**
+   * Sync session registrations for a single event.
+   * Delegates to syncOrchestrator.syncSingleEventSessionRegistrations().
+   */
+  private async executePerEventSessionRegistrationSync(
+    job: SyncJob,
+    event: Event,
+    integration: any,
+    authHeaders: Record<string, string>,
+    syncState: any,
+  ): Promise<SyncResult> {
+    const result = await syncOrchestrator.syncSingleEventSessionRegistrations({
+      integration,
+      event,
+      authHeaders,
+      syncState,
+    });
+
+    return {
+      processedRecords: result.processedCount,
+      createdRecords: result.createdCount,
+      updatedRecords: result.updatedCount,
+      skippedRecords: 0,
+      failedRecords: result.errorCount,
+    };
+  }
+
+  // ─── Sync state backfill ─────────────────────────────────────────────────
+
+  /**
+   * Ensure event_sync_states rows exist for every event linked to this integration,
+   * for all three data types (attendees, sessions, session_registrations).
+   *
+   * Idempotent: skips states that already exist. Respects per-event syncSettings
+   * (syncFrozen, attendeeSyncEnabled, etc.) when creating new states.
+   */
+  async backfillSyncStatesForIntegration(integrationId: string): Promise<{ created: number; existing: number; recalculated: number }> {
+    const events = await storage.getEventsByIntegrationId(integrationId);
+    const dataTypes: SyncDataType[] = ['attendees', 'sessions', 'session_registrations'];
+
+    let created = 0;
+    let existing = 0;
+    let recalculated = 0;
+
+    for (const event of events) {
+      const syncSettings = event.syncSettings as {
+        syncFrozen?: boolean;
+        attendeeSyncEnabled?: boolean;
+        sessionSyncEnabled?: boolean;
+        sessionRegistrationSyncEnabled?: boolean;
+        postEventGracePeriodHours?: number;
+        adaptiveScheduleEnabled?: boolean;
+      } | null;
+
+      for (const dataType of dataTypes) {
+        const existingState = await storage.getEventSyncState(event.id, dataType);
+
+        if (existingState) {
+          // If nextSyncAt is null but the event might be valid again (e.g. dates changed),
+          // recalculate so it doesn't stay stuck
+          if (existingState.nextSyncAt === null && existingState.syncEnabled) {
+            const nextSyncAt = calculateNextSyncAt(
+              {
+                startDate: event.startDate ?? null,
+                endDate: event.endDate ?? null,
+                timezone: event.timezone ?? null,
+                postEventGracePeriodHours: syncSettings?.postEventGracePeriodHours,
+              },
+              dataType,
+            );
+
+            if (nextSyncAt !== null) {
+              await storage.updateEventSyncState(existingState.id, { nextSyncAt });
+              recalculated++;
+              logger.debug(
+                `Recalculated nextSyncAt for event ${event.id} / ${dataType} → ${nextSyncAt.toISOString()}`
+              );
+            }
+          }
+          existing++;
+          continue;
+        }
+
+        // Determine whether this state should be enabled
+        let syncEnabled = true;
+        if (syncSettings?.syncFrozen) {
+          syncEnabled = false;
+        } else if (dataType === 'attendees' && syncSettings?.attendeeSyncEnabled === false) {
+          syncEnabled = false;
+        } else if (dataType === 'sessions' && syncSettings?.sessionSyncEnabled === false) {
+          syncEnabled = false;
+        } else if (dataType === 'session_registrations' && syncSettings?.sessionRegistrationSyncEnabled === false) {
+          syncEnabled = false;
+        }
+
+        const syncTier = dataType === 'session_registrations' ? 'event_dependent' : 'event_data';
+        const adaptiveScheduleEnabled = syncSettings?.adaptiveScheduleEnabled !== false;
+
+        const nextSyncAt = syncEnabled
+          ? calculateNextSyncAt(
+              {
+                startDate: event.startDate ?? null,
+                endDate: event.endDate ?? null,
+                timezone: event.timezone ?? null,
+                postEventGracePeriodHours: syncSettings?.postEventGracePeriodHours,
+              },
+              dataType,
+            )
+          : null;
+
+        // If calculateNextSyncAt returns null, the event is past grace period — disable
+        if (nextSyncAt === null && syncEnabled) {
+          syncEnabled = false;
+        }
+
+        await storage.createEventSyncState({
+          eventId: event.id,
+          integrationId,
+          dataType,
+          syncEnabled,
+          adaptiveScheduleEnabled,
+          syncTier,
+          nextSyncAt,
+          syncStatus: 'pending',
+        });
+
+        created++;
+        logger.debug(`Created sync state for event ${event.id} / ${dataType} (enabled: ${syncEnabled})`);
+      }
+    }
+
+    logger.info(
+      `Backfill for integration ${integrationId}: ${created} created, ${existing} already existed, ${recalculated} recalculated`
+    );
+
+    return { created, existing, recalculated };
+  }
+
+  /**
+   * Startup backfill: iterate all customer integrations and ensure sync states
+   * exist for every event. Handles the case where events were created before
+   * tiered sync was deployed.
+   */
+  async backfillAllSyncStates(): Promise<void> {
+    try {
+      const integrationIds = await storage.getAllCustomerIntegrationIds();
+      logger.info(`Running startup sync state backfill for ${integrationIds.length} integration(s)`);
+
+      let totalCreated = 0;
+      let totalExisting = 0;
+      let totalRecalculated = 0;
+
+      for (const integrationId of integrationIds) {
+        try {
+          const result = await this.backfillSyncStatesForIntegration(integrationId);
+          totalCreated += result.created;
+          totalExisting += result.existing;
+          totalRecalculated += result.recalculated;
+        } catch (error) {
+          logger.error({ err: error, integrationId }, `Backfill failed for integration ${integrationId}`);
+        }
+      }
+
+      logger.info(
+        `Startup backfill complete: ${totalCreated} states created, ${totalExisting} already existed, ${totalRecalculated} recalculated`
+      );
+    } catch (error) {
+      logger.error({ err: error }, 'Startup sync state backfill failed');
+    }
+  }
+
+  // ─── Status ──────────────────────────────────────────────────────────────
 
   getStatus(): SchedulerStatus {
     return {

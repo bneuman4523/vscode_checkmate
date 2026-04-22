@@ -28,6 +28,7 @@ import {
   BookOpen,
   Shield,
   Crown,
+  Activity,
 } from "lucide-react";
 import {
   Sidebar,
@@ -152,6 +153,7 @@ export function AppSidebar() {
       const items = [
         { title: "Feedback", url: "/feedback", icon: MessageSquare },
         { title: "License & Features", url: `/customers/${selectedCustomer.id}/license`, icon: Crown },
+        { title: "Sync Insights", url: `/customers/${selectedCustomer.id}/sync-insights`, icon: Activity },
         { title: "Badge Templates", url: `/customers/${selectedCustomer.id}/badge-templates`, icon: Palette },
         { title: "Locations", url: `/customers/${selectedCustomer.id}/locations`, icon: MapPin },
         { title: "Printer Settings", url: `/customers/${selectedCustomer.id}/printer-settings`, icon: Settings },

@@ -403,9 +403,16 @@ export const events = pgTable("events", {
     realtimeSyncEnabled?: boolean | null;
     syncFrozen?: boolean;
     syncFrozenAt?: string;
-    syncIntervalMinutes?: number | null;
+    syncIntervalMinutes?: number | null; // Deprecated — replaced by adaptive scheduling
     selectedStatuses?: string[];
     statusesConfigured?: boolean;
+    // Tiered sync settings
+    adaptiveScheduleEnabled?: boolean; // Default true. When false, uses fixedIntervalMinutes.
+    fixedIntervalMinutes?: number | null; // Only used when adaptiveScheduleEnabled is false.
+    attendeeSyncEnabled?: boolean; // Default true
+    sessionSyncEnabled?: boolean; // Default true
+    sessionRegistrationSyncEnabled?: boolean; // Default true
+    postEventGracePeriodHours?: number; // Hours after event end to continue syncing (default 2)
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),
@@ -819,6 +826,10 @@ export const eventSyncStates = pgTable("event_sync_states", {
   // Schedule settings (overrides integration defaults)
   syncEnabled: boolean("sync_enabled").notNull().default(true),
   syncIntervalMinutes: integer("sync_interval_minutes"),
+  // Tiered sync support
+  syncTier: text("sync_tier").notNull().default("event_data"), // 'account_discovery', 'event_data', 'event_dependent'
+  adaptiveScheduleEnabled: boolean("adaptive_schedule_enabled").notNull().default(true),
+  lastSyncDurationMs: integer("last_sync_duration_ms"),
   // Audit
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -827,6 +838,7 @@ export const eventSyncStates = pgTable("event_sync_states", {
   integrationIdx: index("event_sync_states_integration_idx").on(table.integrationId),
   dataTypeIdx: index("event_sync_states_data_type_idx").on(table.dataType),
   eventDataTypeIdx: index("event_sync_states_event_data_type_idx").on(table.eventId, table.dataType),
+  dueForSyncIdx: index("event_sync_states_due_sync_idx").on(table.syncEnabled, table.nextSyncAt),
 }));
 
 export const insertEventSyncStateSchema = createInsertSchema(eventSyncStates).omit({
@@ -990,7 +1002,9 @@ export const syncJobs = pgTable("sync_jobs", {
   eventCodeMappingId: text("event_code_mapping_id").references(() => eventCodeMappings.id, { onDelete: "cascade" }),
   endpointConfigId: text("endpoint_config_id").references(() => integrationEndpointConfigs.id, { onDelete: "cascade" }),
   eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }), // Optional: specific event sync
-  jobType: text("job_type").notNull(), // attendee_sync, webhook, manual_refresh, scheduled
+  eventSyncStateId: text("event_sync_state_id").references(() => eventSyncStates.id, { onDelete: "cascade" }),
+  jobType: text("job_type").notNull(), // event_discovery, event_attendee_sync, event_session_sync, event_session_registration_sync, attendee_sync (legacy)
+  syncTier: text("sync_tier"), // 'account_discovery', 'event_data', 'event_dependent'
   triggerType: text("trigger_type").notNull().default("manual"), // scheduled, manual, on_demand, webhook
   priority: integer("priority").notNull().default(5), // 1-10, lower = higher priority
   // Execution metadata

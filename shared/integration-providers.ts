@@ -9,12 +9,24 @@ export type PaginationType = z.infer<typeof PaginationTypeEnum>;
 export const AuthTypeEnum = z.enum(["oauth2", "apiKey", "bearerToken", "basic"]);
 export type AuthType = z.infer<typeof AuthTypeEnum>;
 
+export interface IncrementalFilterSpec {
+  /** Query parameter name (e.g. 'filterBy', 'modifiedSince') */
+  paramName: string;
+  /** Filter expression with {timestamp} placeholder (e.g. 'dateModified_after::{timestamp}') */
+  filterExpression: string;
+  /** Timestamp format identifier — the sync orchestrator uses this to pick the right formatter */
+  timestampFormat: 'certain' | 'iso8601' | 'unix';
+}
+
 export interface EndpointSpec {
   path: string;
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   description: string;
   variables: string[];
   filters?: string[];
+  /** Provider-defined incremental sync filter. When present, the sync orchestrator
+   *  auto-appends this filter to API requests if a lastSyncTimestamp is available. */
+  incrementalFilter?: IncrementalFilterSpec;
   pagination?: {
     type: PaginationType;
     limitParam?: string;
@@ -570,6 +582,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all events",
           variables: [],
           filters: ["eventCode", "startDate", "endDate", "status"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",
@@ -599,6 +616,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all registrations for an event",
           variables: ["eventCode"],
           filters: ["modifiedSince", "registrationStatus", "attendeeType"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",
@@ -633,6 +655,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all sessions for an event",
           variables: ["eventCode"],
           filters: ["sessionDate", "track", "sessionStatus"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",
@@ -687,6 +714,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all events",
           variables: [],
           filters: ["eventCode", "startDate", "endDate", "status"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",
@@ -716,6 +748,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all registrations for an event",
           variables: ["eventCode"],
           filters: ["modifiedSince", "registrationStatus", "attendeeType"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",
@@ -750,6 +787,11 @@ export const INTEGRATION_PROVIDERS: Record<string, IntegrationProviderSpec> = {
           description: "List all sessions for an event",
           variables: ["eventCode"],
           filters: ["sessionDate", "track", "sessionStatus"],
+          incrementalFilter: {
+            paramName: "dateModified_after",
+            filterExpression: "{timestamp}",
+            timestampFormat: "certain",
+          },
           pagination: {
             type: "offset",
             limitParam: "maxResults",

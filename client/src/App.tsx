@@ -45,6 +45,7 @@ import AccountSetupGuide from "@/pages/AccountSetupGuide";
 import LicenseManagement from "@/pages/LicenseManagement";
 import DataRetention from "@/pages/DataRetention";
 import AccountBranding from "@/pages/AccountBranding";
+import SyncInsights from "@/pages/SyncInsights";
 import { Button } from "@/components/ui/button";
 import { Building2, LogIn, LogOut, User, Menu, MoreVertical } from "lucide-react";
 import { useLocation } from "wouter";
@@ -85,6 +86,7 @@ function Router() {
       <Route path="/customers/:customerId/license" component={LicenseManagement} />
       <Route path="/customers/:customerId/data-retention" component={DataRetention} />
       <Route path="/customers/:customerId/branding" component={AccountBranding} />
+      <Route path="/customers/:customerId/sync-insights" component={SyncInsights} />
       <Route path="/customers/:customerId/events/:eventId/reports" component={EventReports} />
       <Route path="/customers/:customerId/events/:eventId/:tab?" component={EventDashboard} />
       <Route path="/templates" component={Templates} />
