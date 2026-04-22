@@ -413,6 +413,11 @@ export const events = pgTable("events", {
     sessionSyncEnabled?: boolean; // Default true
     sessionRegistrationSyncEnabled?: boolean; // Default true
     postEventGracePeriodHours?: number; // Hours after event end to continue syncing (default 2)
+    // Real-time sync status overrides (per-event, overrides integration defaults)
+    checkinStatus?: string; // Status sent when checked in (default from integration: "Attended")
+    revertStatus?: string; // Status sent on revert (default from integration: "Registered")
+    walkinStatus?: string; // Status for walk-in registrations (default from integration: "Checked In")
+    walkinSource?: string; // Source label for walk-ins (default from integration: "Greet")
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),

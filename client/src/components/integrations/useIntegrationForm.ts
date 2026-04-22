@@ -161,7 +161,7 @@ export function useIntegrationForm(
           eventListEndpointPath: eventListEndpointPath || null,
           syncTemplates: Object.keys(syncTemplatesData).length > 0 ? syncTemplatesData : null,
           defaultSyncSettings: defaultSyncSettings,
-          realtimeSyncConfig: realtimeSyncConfig.enabled ? realtimeSyncConfig : null,
+          realtimeSyncConfig: { ...realtimeSyncConfig, enabled: true },
         },
       };
     }

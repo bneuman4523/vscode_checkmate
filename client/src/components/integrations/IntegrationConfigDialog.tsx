@@ -1218,20 +1218,12 @@ function RealtimeTab({
           warningText="Editing enabled. Changes may affect realtime check-in sync."
         />
 
-        <div className="flex items-center space-x-2">
-          <Switch
-            id="realtime-sync-enabled"
-            checked={realtimeSyncConfig.enabled}
-            onCheckedChange={(checked) => onRealtimeSyncConfigChange({
-              ...realtimeSyncConfig,
-              enabled: checked
-            })}
-            disabled={!syncSettingsEditable}
-          />
-          <Label htmlFor="realtime-sync-enabled">Enable realtime sync</Label>
+        <div className="flex items-center space-x-2 bg-green-50 dark:bg-green-900/20 p-2 rounded-md">
+          <Badge variant="outline" className="text-green-600 border-green-300">Enabled</Badge>
+          <Label className="text-sm text-muted-foreground">Realtime sync is always active. Disable per event in Event Settings.</Label>
         </div>
 
-        {realtimeSyncConfig.enabled && (
+        {(
           <>
             <div className="space-y-2">
               <Label htmlFor="realtime-endpoint-url">Registration Endpoint URL</Label>

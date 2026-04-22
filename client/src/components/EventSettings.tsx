@@ -176,6 +176,13 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
   const [localSelectedStatuses, setLocalSelectedStatuses] = useState<string[]>([]);
   const [statusesInitialized, setStatusesInitialized] = useState(false);
 
+  // Sync status override state
+  const [syncCheckinStatus, setSyncCheckinStatus] = useState("");
+  const [syncRevertStatus, setSyncRevertStatus] = useState("");
+  const [syncWalkinStatus, setSyncWalkinStatus] = useState("");
+  const [syncWalkinSource, setSyncWalkinSource] = useState("");
+  const [syncOverridesInitialized, setSyncOverridesInitialized] = useState(false);
+
   const { data: event, isLoading: eventLoading } = useQuery<Event>({
     queryKey: ["/api/events", eventId],
     enabled: !!eventId,
@@ -219,6 +226,49 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       setStatusesInitialized(true);
     }
   }, [discoveredStatusesData, statusesInitialized]);
+
+  // Initialize sync status overrides from event data
+  useEffect(() => {
+    if (event && !syncOverridesInitialized) {
+      const ss = (event as any).syncSettings as Record<string, any> | null | undefined;
+      setSyncCheckinStatus(ss?.checkinStatus || "");
+      setSyncRevertStatus(ss?.revertStatus || "");
+      setSyncWalkinStatus(ss?.walkinStatus || "");
+      setSyncWalkinSource(ss?.walkinSource || "");
+      setSyncOverridesInitialized(true);
+    }
+  }, [event, syncOverridesInitialized]);
+
+  const saveSyncOverridesMutation = useMutation({
+    mutationFn: async (overrides: { checkinStatus?: string; revertStatus?: string; walkinStatus?: string; walkinSource?: string }) => {
+      const existingSyncSettings = (event as any)?.syncSettings || {};
+      const response = await apiRequest("PATCH", `/api/events/${eventId}`, {
+        syncSettings: {
+          ...existingSyncSettings,
+          checkinStatus: overrides.checkinStatus || undefined,
+          revertStatus: overrides.revertStatus || undefined,
+          walkinStatus: overrides.walkinStatus || undefined,
+          walkinSource: overrides.walkinSource || undefined,
+        },
+      });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+      setSyncOverridesInitialized(false);
+      toast({
+        title: "Sync overrides updated",
+        description: "Real-time sync status overrides have been saved.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update sync overrides",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   const saveSelectedStatusesMutation = useMutation({
     mutationFn: async (selectedStatuses: string[]) => {
@@ -1407,6 +1457,95 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
               )}
             </CardContent>
           </Card>
+
+          {(event?.integrationId || eventIntegrations.length > 0) && (
+            <Card data-testid="card-sync-status-overrides" className="mt-6">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <RefreshCw className="h-4 w-4" />
+                  Real-time Sync Status Overrides
+                </CardTitle>
+                <CardDescription>
+                  Override integration-level default statuses for this event's real-time sync
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Check-in Status</Label>
+                    <Select value={syncCheckinStatus || "__default__"} onValueChange={(v) => setSyncCheckinStatus(v === "__default__" ? "" : v)}>
+                      <SelectTrigger data-testid="select-sync-checkin-status">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__default__">Use integration default</SelectItem>
+                        {(discoveredStatusesData?.statuses || []).map(s => (
+                          <SelectItem key={s.label} value={s.label}>{s.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Status sent when attendee is checked in</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Revert Status</Label>
+                    <Select value={syncRevertStatus || "__default__"} onValueChange={(v) => setSyncRevertStatus(v === "__default__" ? "" : v)}>
+                      <SelectTrigger data-testid="select-sync-revert-status">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__default__">Use integration default</SelectItem>
+                        {(discoveredStatusesData?.statuses || []).map(s => (
+                          <SelectItem key={s.label} value={s.label}>{s.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Status sent when check-in is reverted</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Walk-in Status</Label>
+                    <Select value={syncWalkinStatus || "__default__"} onValueChange={(v) => setSyncWalkinStatus(v === "__default__" ? "" : v)}>
+                      <SelectTrigger data-testid="select-sync-walkin-status">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__default__">Use integration default</SelectItem>
+                        {(discoveredStatusesData?.statuses || []).map(s => (
+                          <SelectItem key={s.label} value={s.label}>{s.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Status for new walk-in registrations</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="syncWalkinSource" className="text-sm font-medium">Walk-in Source</Label>
+                    <Input
+                      id="syncWalkinSource"
+                      placeholder="Greet"
+                      value={syncWalkinSource}
+                      onChange={(e) => setSyncWalkinSource(e.target.value)}
+                      data-testid="input-sync-walkin-source"
+                    />
+                    <p className="text-xs text-muted-foreground">Source label for walk-in registrations</p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2 border-t">
+                  <Button
+                    onClick={() => saveSyncOverridesMutation.mutate({
+                      checkinStatus: syncCheckinStatus,
+                      revertStatus: syncRevertStatus,
+                      walkinStatus: syncWalkinStatus,
+                      walkinSource: syncWalkinSource,
+                    })}
+                    disabled={saveSyncOverridesMutation.isPending}
+                    data-testid="button-save-sync-overrides"
+                  >
+                    {saveSyncOverridesMutation.isPending ? "Saving..." : "Save Overrides"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>}
 
         {activeSection === "workflow" && <div>

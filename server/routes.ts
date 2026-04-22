@@ -7139,23 +7139,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Forbidden" });
       }
       
+      // Resolve revert status: event override → integration config → default
+      const eventSyncSettings = event.syncSettings as any;
+      let revertStatus = 'Registered';
+      let integration: any = null;
+      if (event.integrationId) {
+        integration = await storage.getCustomerIntegration(event.integrationId);
+        const rtConfig = integration?.realtimeSyncConfig as any;
+        if (rtConfig?.revertStatus) revertStatus = rtConfig.revertStatus;
+      }
+      if (eventSyncSettings?.revertStatus) revertStatus = eventSyncSettings.revertStatus;
+
       const revertUpdates = {
         checkedIn: false,
         checkedInAt: null,
-        registrationStatus: "Registered",
+        registrationStatus: revertStatus,
         badgePrinted: false,
         badgePrintedAt: null,
       };
-      
+
       const updated = await storage.updateAttendee(req.params.id, revertUpdates as any);
 
       await storage.deleteAttendeeWorkflowResponses(req.params.id, attendee.eventId);
       await storage.deleteAttendeeSignaturesByAttendee(req.params.id, attendee.eventId);
-      
+
       // Send real-time sync revert to external system (async, non-blocking)
-      // Use void to explicitly indicate fire-and-forget pattern
       if (event && updated) {
-        const integration = await checkinSyncService.getIntegrationForEvent(event);
+        if (!integration && event.integrationId) {
+          integration = await checkinSyncService.getIntegrationForEvent(event);
+        } else if (!integration) {
+          integration = await checkinSyncService.getIntegrationForEvent(event);
+        }
         if (integration) {
           void checkinSyncService.sendCheckinRevertSync(updated, event, integration, req.body.revertedBy)
             .then(result => {
