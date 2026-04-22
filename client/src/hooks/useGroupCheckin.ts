@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { apiRequest } from "@/lib/queryClient";
+import type { OfflineAttendee } from "@/lib/offline-db";
 
 interface UseGroupCheckinOptions {
   eventId: string;
@@ -26,6 +27,7 @@ export interface GroupMember {
 interface UseGroupCheckinReturn {
   // Lookup
   lookupGroup: (orderCode: string) => Promise<boolean>;
+  offlineLookup: (orderCode: string, offlineAttendees: OfflineAttendee[]) => boolean;
   isLookingUp: boolean;
 
   // State
@@ -130,6 +132,59 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
       setIsLookingUp(false);
     }
   }, [eventId, mode, pin, reset]);
+
+  /**
+   * Offline fallback: search cached attendees by orderCode to find group members.
+   * Returns true if a multi-member group was found and state was populated.
+   */
+  const offlineLookup = useCallback((orderCode: string, offlineAttendees: OfflineAttendee[]): boolean => {
+    // Search for attendees whose orderCode matches the scanned value
+    const matchingMembers = offlineAttendees.filter(
+      a => a.orderCode === orderCode || a.externalId === orderCode
+    );
+
+    // If only 0-1 found, it's not a group
+    if (matchingMembers.length <= 1) {
+      return false;
+    }
+
+    // Convert OfflineAttendee[] to GroupMember[]
+    const groupMembers: GroupMember[] = matchingMembers.map(a => ({
+      id: a.id,
+      firstName: a.firstName,
+      lastName: a.lastName,
+      email: a.email || undefined,
+      company: a.company || undefined,
+      title: a.title || undefined,
+      participantType: a.participantType || 'General',
+      checkedIn: a.checkedIn || false,
+      checkedInAt: a.checkedInAt || undefined,
+      badgePrinted: a.badgePrinted || false,
+      externalId: a.externalId || undefined,
+      orderCode: a.orderCode || undefined,
+    }));
+
+    // The primary is the one whose externalId matches the orderCode (group leader)
+    const primary = groupMembers.find(m => m.externalId === orderCode) || groupMembers[0];
+
+    setMembers(groupMembers);
+    setPrimaryId(primary.id);
+    setIsGroupFound(true);
+
+    // Pre-select unchecked members + primary
+    const preSelected = new Set<string>();
+    for (const member of groupMembers) {
+      if (!member.checkedIn) {
+        preSelected.add(member.id);
+      }
+    }
+    if (primary.id) {
+      preSelected.add(primary.id);
+    }
+    setSelectedIds(preSelected);
+
+    return true;
+  }, []);
 
   const toggleMember = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -240,6 +295,7 @@ export function useGroupCheckin(options: UseGroupCheckinOptions): UseGroupChecki
 
   return {
     lookupGroup,
+    offlineLookup,
     isLookingUp,
     members,
     primaryId,
