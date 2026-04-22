@@ -53,7 +53,7 @@ app.use(helmet({
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
-      upgradeInsecureRequests: [],
+      ...(process.env.DISABLE_HTTPS_UPGRADE ? {} : { upgradeInsecureRequests: [] }),
     },
   },
   crossOriginEmbedderPolicy: false,
