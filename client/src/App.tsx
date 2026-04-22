@@ -46,6 +46,7 @@ import LicenseManagement from "@/pages/LicenseManagement";
 import DataRetention from "@/pages/DataRetention";
 import AccountBranding from "@/pages/AccountBranding";
 import SyncInsights from "@/pages/SyncInsights";
+import PrinterDiagnostics from "@/pages/PrinterDiagnostics";
 import { Button } from "@/components/ui/button";
 import { Building2, LogIn, LogOut, User, Menu, MoreVertical } from "lucide-react";
 import { useLocation } from "wouter";
@@ -103,6 +104,7 @@ function Router() {
       <Route path="/errors" component={ErrorReport} />
       <Route path="/audit-log" component={AuditLog} />
       <Route path="/mission-control" component={MissionControl} />
+      <Route path="/printer-diagnostics" component={PrinterDiagnostics} />
       <Route path="/feedback" component={FeedbackDashboard} />
       <Route path="/my-feedback" component={MyFeedback} />
       <Route path="/docs/event-setup" component={EventSetupGuide} />

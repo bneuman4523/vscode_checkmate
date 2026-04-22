@@ -28,6 +28,7 @@ import { registerObjectStorageRoutes } from "./replit_integrations/object_storag
 import { registerLocalStorageRoutes } from "./services/local-storage";
 import { registerReportRoutes } from "./routes/reports";
 import { registerSyncInsightsRoutes } from "./routes/sync-insights";
+import { registerPrinterDiagnosticsRoutes } from "./routes/printer-diagnostics";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
 
@@ -235,6 +236,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Register sync insights routes (super_admin + admin)
   registerSyncInsightsRoutes(app);
+
+  // Register printer diagnostics routes (super_admin only)
+  registerPrinterDiagnosticsRoutes(app);
 
   // =====================
   // Auth Routes

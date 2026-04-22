@@ -29,6 +29,7 @@ import {
   Shield,
   Crown,
   Activity,
+  Stethoscope,
 } from "lucide-react";
 import {
   Sidebar,
@@ -174,6 +175,7 @@ export function AppSidebar() {
     { title: "Accounts", url: "/customers", icon: Building2 },
     { title: "User Management", url: "/users", icon: UserCircle },
     { title: "Mission Control", url: "/mission-control", icon: Rocket },
+    { title: "Printer Diagnostics", url: "/printer-diagnostics", icon: Stethoscope },
     { title: "System Settings", url: "/settings", icon: Settings },
     { title: "Error Report", url: "/errors", icon: Bug },
     { title: "Settings Audit Log", url: "/audit-log", icon: ClipboardList },
