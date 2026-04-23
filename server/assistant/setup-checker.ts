@@ -175,7 +175,7 @@ export async function checkEventSetup(
       complete: hasPin,
       severity: "required",
       fixAction: "set_kiosk_pin",
-      fixRoute: null,
+      fixRoute: `${basePath}/settings`,
     });
   } else {
     items.push({
@@ -185,7 +185,7 @@ export async function checkEventSetup(
       complete: false,
       severity: "optional",
       fixAction: null,
-      fixRoute: null,
+      fixRoute: `${basePath}/settings`,
     });
   }
 
@@ -227,7 +227,7 @@ export async function checkEventSetup(
     complete: staffEnabled,
     severity: "optional",
     fixAction: "set_temp_staff_access",
-    fixRoute: null,
+    fixRoute: `${basePath}/settings`,
   });
 
   items.push({
@@ -239,7 +239,7 @@ export async function checkEventSetup(
     complete: kioskFromStaff,
     severity: "optional",
     fixAction: "set_kiosk_mode",
-    fixRoute: null,
+    fixRoute: `${basePath}/settings`,
   });
 
   const required = items.filter((i) => i.severity === "required");
