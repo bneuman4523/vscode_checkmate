@@ -125,19 +125,19 @@ export type InsertLocation = z.infer<typeof insertLocationSchema>;
 export type Location = typeof locations.$inferSelect;
 
 // User roles hierarchy
-export const userRoles = ['super_admin', 'admin', 'manager', 'staff'] as const;
+export const userRoles = ['super_admin', 'partner', 'admin', 'manager', 'staff'] as const;
 export type UserRole = typeof userRoles[number];
 
-// Users (scoped to customer accounts, except super_admin which is global)
+// Users (scoped to customer accounts, except super_admin/partner which are multi-account)
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
-  customerId: text("customer_id").references(() => customers.id, { onDelete: "cascade" }), // NULL for super_admin
+  customerId: text("customer_id").references(() => customers.id, { onDelete: "cascade" }), // NULL for super_admin and partner
   email: text("email").notNull().unique(),
   phoneNumber: text("phone_number").unique(), // E.164 format (e.g., +15551234567) - must be unique to prevent access conflicts
   passwordHash: text("password_hash"), // For email/password login (optional - NULL means Replit Auth only)
   firstName: text("first_name"),
   lastName: text("last_name"),
-  role: text("role").notNull().default("staff").$type<UserRole>(), // super_admin, admin, manager, staff
+  role: text("role").notNull().default("staff").$type<UserRole>(), // super_admin, partner, admin, manager, staff
   isActive: boolean("is_active").notNull().default(true),
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -2149,3 +2149,23 @@ export const insertDataRetentionLogSchema = createInsertSchema(dataRetentionLog)
 });
 export type InsertDataRetentionLog = z.infer<typeof insertDataRetentionLogSchema>;
 export type DataRetentionLog = typeof dataRetentionLog.$inferSelect;
+
+// Partner-to-customer assignments (partners can access multiple accounts)
+export const partnerCustomerAssignments = pgTable("partner_customer_assignments", {
+  id: text("id").primaryKey().$defaultFn(() => `pca-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+  assignedBy: text("assigned_by").references(() => users.id), // super_admin who made the assignment
+}, (table) => ({
+  userIdx: index("pca_user_idx").on(table.userId),
+  customerIdx: index("pca_customer_idx").on(table.customerId),
+  uniqueAssignment: index("pca_unique_idx").on(table.userId, table.customerId),
+}));
+
+export const insertPartnerCustomerAssignmentSchema = createInsertSchema(partnerCustomerAssignments).omit({
+  id: true,
+  assignedAt: true,
+});
+export type InsertPartnerCustomerAssignment = z.infer<typeof insertPartnerCustomerAssignmentSchema>;
+export type PartnerCustomerAssignment = typeof partnerCustomerAssignments.$inferSelect;

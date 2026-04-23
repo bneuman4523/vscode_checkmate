@@ -3,7 +3,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertPrinterSchema, insertCustomerSchema, insertEventSchema, insertBadgeTemplateSchema, insertCustomerIntegrationSchema, insertEventIntegrationSchema, insertAttendeeSchema, updateAttendeeSchema, insertIntegrationConnectionSchema, insertSessionSchema, insertUserSchema, insertIntegrationEndpointConfigSchema, insertEventCodeMappingSchema, insertSessionCodeMappingSchema, insertEventBadgeTemplateOverrideSchema, insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema, insertAttendeeSignatureSchema, insertEventConfigurationTemplateSchema, userRoles, type StaffSession, type Event } from "@shared/schema";
+import { insertPrinterSchema, insertCustomerSchema, insertEventSchema, insertBadgeTemplateSchema, insertCustomerIntegrationSchema, insertEventIntegrationSchema, insertAttendeeSchema, updateAttendeeSchema, insertIntegrationConnectionSchema, insertSessionSchema, insertUserSchema, insertIntegrationEndpointConfigSchema, insertEventCodeMappingSchema, insertSessionCodeMappingSchema, insertEventBadgeTemplateOverrideSchema, insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema, insertAttendeeSignatureSchema, insertEventConfigurationTemplateSchema, userRoles, partnerCustomerAssignments, type StaffSession, type Event } from "@shared/schema";
 import { z } from "zod";
 import { randomBytes, createHash, timingSafeEqual } from "crypto";
 import { 
@@ -19,7 +19,7 @@ import {
   isTokenExpired,
   calculateTokenExpiry
 } from "./credential-manager";
-import { authMiddleware, requireAuth, requireRole, canManageUsers, canAssignRole, getEffectiveCustomerId, isSuperAdmin } from "./auth";
+import { authMiddleware, requireAuth, requireRole, canManageUsers, canAssignRole, getEffectiveCustomerId, isSuperAdmin, isPartner, isPartnerOrAbove, getPartnerAssignedCustomerIds } from "./auth";
 import { badgeTemplateResolver } from "./services/badge-template-resolver";
 import { checkinSyncService } from "./services/checkin-sync-service";
 import badgeAiRoutes from "./routes/badge-ai";
@@ -31,6 +31,8 @@ import { registerSyncInsightsRoutes } from "./routes/sync-insights";
 import { registerPrinterDiagnosticsRoutes } from "./routes/printer-diagnostics";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
+import { db } from "./db";
+import { eq, and, inArray } from "drizzle-orm";
 
 const logger = createChildLogger('Routes');
 
@@ -250,18 +252,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.dbUser) {
         return res.status(401).json({ error: "Not authenticated" });
       }
-      
+
       const { id, email, firstName, lastName, role, customerId, isActive } = req.dbUser;
-      
+
       let customer = null;
       if (customerId) {
         customer = await storage.getCustomer(customerId);
       }
-      
+
+      // For partners, include their assigned customer IDs
+      let assignedCustomerIds: string[] | undefined;
+      if (role === "partner") {
+        assignedCustomerIds = await getPartnerAssignedCustomerIds(id);
+      }
+
       res.json({
         user: { id, email, firstName, lastName, role, customerId, isActive },
         customer: customer ? { id: customer.id, name: customer.name } : null,
         isSuperAdmin: role === "super_admin",
+        isPartner: role === "partner",
+        assignedCustomerIds,
       });
     } catch (error) {
       logger.error({ err: error }, "Error fetching current user");
@@ -1319,19 +1329,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!canManageUsers(req.dbUser)) {
         return res.status(403).json({ error: "Only admins can view users" });
       }
-      
+
       const customerId = req.query.customerId as string;
-      
+
       if (isSuperAdmin(req.dbUser)) {
         if (customerId) {
-          // Inside a customer account - show only that customer's users
           const users = await storage.getUsersByCustomer(customerId);
           res.json(users);
         } else {
-          // Root level - only show super admin users (no customer assignment)
+          // Root level - show super admin and partner users (no customer assignment)
           const allUsers = await storage.getAllUsers();
-          const superAdminUsers = allUsers.filter(u => u.role === 'super_admin');
-          res.json(superAdminUsers);
+          const globalUsers = allUsers.filter(u => u.role === 'super_admin' || u.role === 'partner');
+          res.json(globalUsers);
+        }
+      } else if (isPartner(req.dbUser) && req.dbUser) {
+        if (customerId) {
+          // Verify partner has access to this customer
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(customerId)) {
+            return res.status(403).json({ error: "Not assigned to this customer" });
+          }
+          const users = await storage.getUsersByCustomer(customerId);
+          res.json(users);
+        } else {
+          return res.json([]);
         }
       } else {
         if (!req.dbUser?.customerId) {
@@ -1353,11 +1374,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
-      
-      if (!isSuperAdmin(req.dbUser) && user.customerId !== req.dbUser?.customerId) {
+
+      if (isSuperAdmin(req.dbUser)) {
+        return res.json(user);
+      }
+
+      if (isPartner(req.dbUser) && req.dbUser && user.customerId) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.includes(user.customerId)) {
+          return res.json(user);
+        }
+      }
+
+      if (user.customerId !== req.dbUser?.customerId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      
+
       res.json(user);
     } catch (error) {
       logger.error({ err: error }, "Error fetching user");
@@ -1380,21 +1412,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Customer scoping
-      if (!isSuperAdmin(req.dbUser)) {
+      if (!isSuperAdmin(req.dbUser) && !isPartner(req.dbUser)) {
         if (userData.customerId && userData.customerId !== req.dbUser?.customerId) {
           return res.status(403).json({ error: "Cannot create users in other customers" });
         }
         userData.customerId = req.dbUser?.customerId;
+      } else if (isPartner(req.dbUser) && req.dbUser && userData.customerId) {
+        // Partners can only create users in their assigned customers
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (!assignedIds.includes(userData.customerId)) {
+          return res.status(403).json({ error: "Cannot create users in unassigned customers" });
+        }
       }
       
-      // Super admin validation
-      if (userData.role === "super_admin" && userData.customerId) {
-        return res.status(400).json({ error: "Super admins cannot be assigned to a customer" });
+      // Super admin and partner validation — these roles span multiple accounts
+      if ((userData.role === "super_admin" || userData.role === "partner") && userData.customerId) {
+        return res.status(400).json({ error: `${userData.role === "super_admin" ? "Super admins" : "Partners"} cannot be assigned to a single customer` });
       }
-      
-      // Non-super_admin must have customerId
-      if (userData.role !== "super_admin" && !userData.customerId) {
-        return res.status(400).json({ error: "Non-super admin users must be assigned to a customer" });
+
+      // Non-global roles must have customerId
+      if (userData.role !== "super_admin" && userData.role !== "partner" && !userData.customerId) {
+        return res.status(400).json({ error: "Non-global users must be assigned to a customer" });
       }
       
       // Check for existing user with same email
@@ -1462,9 +1500,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "User not found" });
       }
       
-      // Non-super admin can only send invites to users in their customer
-      if (!isSuperAdmin(req.dbUser) && user.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Cannot send invites to users in other customers" });
+      // Non-super admin can only send invites to users in their customer (or assigned for partners)
+      if (!isSuperAdmin(req.dbUser)) {
+        if (isPartner(req.dbUser) && req.dbUser && user.customerId) {
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(user.customerId)) {
+            return res.status(403).json({ error: "Cannot send invites to users in unassigned customers" });
+          }
+        } else if (user.customerId !== req.dbUser?.customerId) {
+          return res.status(403).json({ error: "Cannot send invites to users in other customers" });
+        }
       }
       
       // Check if user has a phone number
@@ -1580,19 +1625,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Only admins can update other users" });
       }
       
-      // Non-super admin can only update users in their customer
-      if (!isSuperAdmin(req.dbUser) && targetUser.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Cannot update users in other customers" });
+      // Non-super admin can only update users in their customer (or assigned customers for partners)
+      if (!isSuperAdmin(req.dbUser)) {
+        if (isPartner(req.dbUser) && req.dbUser && targetUser.customerId) {
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(targetUser.customerId)) {
+            return res.status(403).json({ error: "Cannot update users in unassigned customers" });
+          }
+        } else if (targetUser.customerId !== req.dbUser?.customerId) {
+          return res.status(403).json({ error: "Cannot update users in other customers" });
+        }
       }
       
-      // Non-super admin cannot update super admin users
-      if (!isSuperAdmin(req.dbUser) && targetUser.role === "super_admin") {
-        return res.status(403).json({ error: "Cannot update super admin users" });
+      // Non-super admin cannot update super admin or partner users
+      if (!isSuperAdmin(req.dbUser) && (targetUser.role === "super_admin" || targetUser.role === "partner")) {
+        return res.status(403).json({ error: "Cannot update super admin or partner users" });
       }
-      
-      // SECURITY: Non-super admin cannot assign super_admin role to anyone
-      if (!isSuperAdmin(req.dbUser) && updates.role === "super_admin") {
-        return res.status(403).json({ error: "Only super admins can assign super_admin role" });
+
+      // SECURITY: Only super admins can assign super_admin or partner roles
+      if (!isSuperAdmin(req.dbUser) && (updates.role === "super_admin" || updates.role === "partner")) {
+        return res.status(403).json({ error: "Only super admins can assign super_admin or partner roles" });
       }
       
       // Role validation using canAssignRole
@@ -1604,14 +1656,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const newRole = updates.role ?? targetUser.role;
       const newCustomerId = updates.customerId !== undefined ? updates.customerId : targetUser.customerId;
       
-      // Super admins cannot have a customerId
-      if (newRole === "super_admin" && newCustomerId) {
-        return res.status(400).json({ error: "Super admins cannot be assigned to a customer" });
+      // Super admins and partners cannot have a customerId
+      if ((newRole === "super_admin" || newRole === "partner") && newCustomerId) {
+        return res.status(400).json({ error: `${newRole === "super_admin" ? "Super admins" : "Partners"} cannot be assigned to a single customer` });
       }
-      
-      // Non-super_admin must have customerId
-      if (newRole !== "super_admin" && !newCustomerId) {
-        return res.status(400).json({ error: "Non-super admin users must be assigned to a customer" });
+
+      // Non-global roles must have customerId
+      if (newRole !== "super_admin" && newRole !== "partner" && !newCustomerId) {
+        return res.status(400).json({ error: "Non-global users must be assigned to a customer" });
       }
       
       // SECURITY: Non-super admins cannot remove customerId from users
@@ -1687,13 +1739,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const customers = await storage.getCustomers();
         return res.json(customers);
       }
-      
+
+      // Partners see only their assigned customers
+      if (isPartner(req.dbUser) && req.dbUser) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.length === 0) return res.json([]);
+        const allCustomers = await storage.getCustomers();
+        return res.json(allCustomers.filter(c => assignedIds.includes(c.id)));
+      }
+
       // Non-super-admins can only see their own customer
       if (req.dbUser?.customerId) {
         const customer = await storage.getCustomer(req.dbUser.customerId);
         return res.json(customer ? [customer] : []);
       }
-      
+
       // Users without a customer assignment see nothing
       return res.json([]);
     } catch (error) {
@@ -1709,12 +1769,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!customer) {
         return res.status(404).json({ error: "Customer not found" });
       }
-      
-      // Non-super-admins can only access their own customer
-      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customer.id) {
+
+      // Super admins can access any customer
+      if (isSuperAdmin(req.dbUser)) {
+        return res.json(customer);
+      }
+
+      // Partners can access their assigned customers
+      if (isPartner(req.dbUser) && req.dbUser) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.includes(customer.id)) {
+          return res.json(customer);
+        }
         return res.status(403).json({ error: "Access denied" });
       }
-      
+
+      // Other roles can only access their own customer
+      if (req.dbUser?.customerId !== customer.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
       res.json(customer);
     } catch (error) {
       logger.error({ err: error }, "Error fetching customer");
@@ -1844,9 +1918,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =====================
+  // Partner Customer Assignments (super admin only)
+  // =====================
+
+  // Get assigned customers for a partner user
+  app.get("/api/users/:userId/partner-assignments", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const targetUser = await storage.getUser(req.params.userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (targetUser.role !== "partner") {
+        return res.status(400).json({ error: "User is not a partner" });
+      }
+      const assignments = await db.select()
+        .from(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+      res.json(assignments);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching partner assignments");
+      res.status(500).json({ error: "Failed to fetch partner assignments" });
+    }
+  });
+
+  // Set partner customer assignments (replaces all existing)
+  app.put("/api/users/:userId/partner-assignments", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const targetUser = await storage.getUser(req.params.userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (targetUser.role !== "partner") {
+        return res.status(400).json({ error: "User is not a partner" });
+      }
+
+      const { customerIds } = z.object({
+        customerIds: z.array(z.string()),
+      }).parse(req.body);
+
+      // Validate all customer IDs exist
+      for (const cid of customerIds) {
+        const customer = await storage.getCustomer(cid);
+        if (!customer) {
+          return res.status(400).json({ error: `Customer ${cid} not found` });
+        }
+      }
+
+      // Delete existing assignments
+      await db.delete(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+
+      // Create new assignments
+      if (customerIds.length > 0) {
+        await db.insert(partnerCustomerAssignments).values(
+          customerIds.map(cid => ({
+            userId: req.params.userId,
+            customerId: cid,
+            assignedBy: req.dbUser!.id,
+          }))
+        );
+      }
+
+      const assignments = await db.select()
+        .from(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+      res.json(assignments);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating partner assignments");
+      res.status(500).json({ error: "Failed to update partner assignments" });
+    }
+  });
+
+  // =====================
   // Location Routes (scoped to customer, requires authentication)
   // =====================
-  
+
   // Get locations for a customer
   app.get("/api/locations", requireAuth, async (req, res) => {
     try {

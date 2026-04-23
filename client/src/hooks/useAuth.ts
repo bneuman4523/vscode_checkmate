@@ -4,6 +4,9 @@ import type { User } from "@shared/schema";
 interface AuthUser {
   user: User;
   customer: { id: string; name: string } | null;
+  isSuperAdmin?: boolean;
+  isPartner?: boolean;
+  assignedCustomerIds?: string[];
 }
 
 export function useAuth() {
@@ -17,6 +20,8 @@ export function useAuth() {
     customer: data?.customer,
     isLoading,
     isAuthenticated: !!data?.user,
+    isPartner: data?.isPartner ?? false,
+    assignedCustomerIds: data?.assignedCustomerIds,
     error,
   };
 }

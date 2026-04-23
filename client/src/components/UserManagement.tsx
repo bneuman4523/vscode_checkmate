@@ -53,6 +53,7 @@ import {
   UserCog, 
   User as UserIcon,
   Building,
+  Building2,
   Mail,
   Phone,
   CheckCircle2,
@@ -75,7 +76,7 @@ const userFormSchema = z.object({
   }).pipe(z.string().regex(/^\+[1-9]\d{1,14}$/, "Please enter a valid phone number with country code")),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
-  role: z.enum(["super_admin", "admin", "manager", "staff"]),
+  role: z.enum(["super_admin", "partner", "admin", "manager", "staff"]),
   customerId: z.string().nullable().optional(),
   isActive: z.boolean().default(true),
   sendInviteSMS: z.boolean().default(true),
@@ -87,6 +88,7 @@ interface AuthInfo {
   user: User;
   customer: { id: string; name: string } | null;
   isSuperAdmin: boolean;
+  isPartner?: boolean;
 }
 
 export default function UserManagement() {
@@ -102,13 +104,15 @@ export default function UserManagement() {
     queryKey: ["/api/auth/me"],
   });
 
+  const isMultiAccount = authInfo?.isSuperAdmin || authInfo?.isPartner;
+
   const { data: customers = [], isLoading: customersLoading } = useQuery<Customer[]>({
     queryKey: ["/api/customers"],
-    enabled: authInfo?.isSuperAdmin,
+    enabled: !!isMultiAccount,
   });
 
-  const effectiveCustomerId = authInfo?.isSuperAdmin 
-    ? selectedCustomerId 
+  const effectiveCustomerId = isMultiAccount
+    ? selectedCustomerId
     : authInfo?.user?.customerId;
 
   const { data: users = [], isLoading: usersLoading } = useQuery<User[]>({
@@ -200,6 +204,8 @@ export default function UserManagement() {
     switch (role) {
       case "super_admin":
         return <Shield className="h-4 w-4" />;
+      case "partner":
+        return <Building2 className="h-4 w-4" />;
       case "admin":
         return <UserCog className="h-4 w-4" />;
       default:
@@ -211,6 +217,8 @@ export default function UserManagement() {
     switch (role) {
       case "super_admin":
         return "default";
+      case "partner":
+        return "default";
       case "admin":
         return "secondary";
       default:
@@ -220,7 +228,7 @@ export default function UserManagement() {
 
   const availableRoles = (): UserRole[] => {
     if (authInfo?.isSuperAdmin) {
-      return ["super_admin", "admin", "manager", "staff"];
+      return ["super_admin", "partner", "admin", "manager", "staff"];
     }
     return ["admin", "manager", "staff"];
   };
@@ -238,7 +246,7 @@ export default function UserManagement() {
     );
   }
 
-  if (!authInfo?.user || !["super_admin", "admin"].includes(authInfo.user.role)) {
+  if (!authInfo?.user || !["super_admin", "partner", "admin"].includes(authInfo.user.role)) {
     return (
       <Card>
         <CardContent className="py-12 text-center">
@@ -261,15 +269,15 @@ export default function UserManagement() {
             User Management
           </h2>
           <p className="text-muted-foreground mt-1">
-            {authInfo.isSuperAdmin 
-              ? "Manage users across all accounts"
+            {isMultiAccount
+              ? "Manage users across accounts"
               : `Manage users for ${authInfo.customer?.name || "your organization"}`
             }
           </p>
         </div>
-        
+
         <div className="flex items-center gap-3">
-          {authInfo.isSuperAdmin && (
+          {isMultiAccount && (
             <Select
               value={selectedCustomerId || "all"}
               onValueChange={(v) => setSelectedCustomerId(v === "all" ? null : v)}
@@ -361,7 +369,7 @@ export default function UserManagement() {
                       <Phone className="h-3 w-3" /> SMS
                     </Badge>
                   )}
-                  {authInfo.isSuperAdmin && user.customerId && (
+                  {isMultiAccount && user.customerId && (
                     <Badge variant="outline" className="gap-1 text-xs">
                       <Building className="h-3 w-3" />
                       {customers.find(c => c.id === user.customerId)?.name || "Unknown"}
@@ -407,7 +415,7 @@ export default function UserManagement() {
         open={isCreateDialogOpen}
         onOpenChange={setIsCreateDialogOpen}
         mode="create"
-        isSuperAdmin={authInfo.isSuperAdmin}
+        isSuperAdmin={!!isMultiAccount}
         customers={customers}
         defaultCustomerId={effectiveCustomerId}
         availableRoles={availableRoles()}
@@ -421,7 +429,7 @@ export default function UserManagement() {
           onOpenChange={(open) => !open && setEditingUser(null)}
           mode="edit"
           user={editingUser}
-          isSuperAdmin={authInfo.isSuperAdmin}
+          isSuperAdmin={!!isMultiAccount}
           customers={customers}
           defaultCustomerId={editingUser.customerId}
           availableRoles={availableRoles()}
@@ -582,7 +590,7 @@ function UserDialog({
   const selectedRole = form.watch("role");
 
   const handleSubmit = (data: UserFormValues) => {
-    if (data.role === "super_admin") {
+    if (data.role === "super_admin" || data.role === "partner") {
       data.customerId = null;
     }
     onSubmit(data);
@@ -703,7 +711,7 @@ function UserDialog({
               )}
             />
             
-            {isSuperAdmin && selectedRole !== "super_admin" && (
+            {isSuperAdmin && selectedRole !== "super_admin" && selectedRole !== "partner" && (
               <FormField
                 control={form.control}
                 name="customerId"
