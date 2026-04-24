@@ -269,7 +269,7 @@ class OfflineCheckinService {
           });
         }
         break;
-      
+
       case 'checkout':
         if (item.entity === 'session') {
           await apiRequest('POST', `/api/sessions/${item.entityId}/checkout`, {
@@ -278,13 +278,59 @@ class OfflineCheckinService {
           });
         }
         break;
-      
+
       case 'print':
         await apiRequest('POST', `/api/attendees/${item.entityId}/badge-printed`);
         break;
-      
+
+      case 'walkin':
+        await this.syncWalkinRegistration(item);
+        break;
+
       default:
         console.warn('[OfflineCheckin] Unknown sync action:', item.action);
+    }
+  }
+
+  /**
+   * Sync an offline walk-in registration to the server.
+   * Posts the walk-in data, then updates the local IndexedDB record
+   * with the real server-assigned ID (replacing the temp ID).
+   */
+  private async syncWalkinRegistration(item: any): Promise<void> {
+    const { eventId, pin, formData, tempId } = item.data;
+
+    const res = await fetch(`/api/kiosk/${eventId}/walkin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin, ...formData }),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ error: 'Walkin sync failed' }));
+      throw new Error(errData.error || 'Failed to sync walk-in registration');
+    }
+
+    const data = await res.json();
+
+    // If the server returned a real attendee, update the local record
+    if (data.success && data.attendee && tempId) {
+      try {
+        // Remove the temp record from IndexedDB
+        const db = await offlineDB.init();
+        const existingTemp = await db.get('attendees', tempId);
+        if (existingTemp) {
+          await db.delete('attendees', tempId);
+          // Save the real attendee record
+          await offlineDB.saveAttendee({
+            ...existingTemp,
+            id: data.attendee.id,
+            syncStatus: 'synced',
+          });
+        }
+      } catch (dbErr) {
+        console.warn('[OfflineCheckin] Failed to update temp walk-in record:', dbErr);
+      }
     }
   }
 

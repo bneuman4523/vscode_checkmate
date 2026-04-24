@@ -14,6 +14,8 @@ export interface OfflineAttendee {
   badgePrinted: boolean;
   badgePrintedAt?: string;
   qrCode: string;
+  externalId?: string;
+  orderCode?: string;
   customFields?: Record<string, any>;
   syncStatus: 'synced' | 'pending' | 'conflict';
   lastModified: string;
@@ -74,7 +76,7 @@ export interface PrintQueueItem {
 
 export interface SyncQueueItem {
   id?: number;
-  action: 'create' | 'update' | 'delete' | 'checkin' | 'checkout' | 'print';
+  action: 'create' | 'update' | 'delete' | 'checkin' | 'checkout' | 'print' | 'walkin';
   entity: 'attendee' | 'event' | 'checkin' | 'badge' | 'session';
   entityId: string;
   data: any;

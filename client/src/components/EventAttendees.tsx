@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { playCheckinSound } from "@/lib/sounds";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -83,6 +83,7 @@ import { getPrinterDisplayName } from "@/lib/printerPreferences";
 import type { SelectedPrinter } from "@/lib/printerPreferences";
 import type { Attendee, EventWorkflowStep, EventBuyerQuestion, EventDisclaimer, BadgeTemplate } from "@shared/schema";
 import { registrationStatuses } from "@shared/schema";
+import { offlineDB, OfflineAttendee, OfflineEvent } from "@/lib/offline-db";
 
 import {
   AttendeeFormDialog,
@@ -181,6 +182,68 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
     queryKey: [`/api/attendees?eventId=${eventId}`],
     enabled: !!eventId,
   });
+
+  // Pre-populate IndexedDB cache for offline kiosk use when attendees are loaded
+  const lastCachedCountRef = useRef<number>(0);
+  useEffect(() => {
+    if (attendees.length > 0 && attendees.length !== lastCachedCountRef.current) {
+      lastCachedCountRef.current = attendees.length;
+      (async () => {
+        try {
+          // Cache attendees for offline kiosk use
+          const offlineAttendees: OfflineAttendee[] = attendees.map((a: Attendee) => ({
+            id: a.id,
+            eventId: a.eventId || eventId,
+            firstName: a.firstName,
+            lastName: a.lastName,
+            email: a.email || '',
+            company: a.company || undefined,
+            title: a.title || undefined,
+            participantType: a.participantType || 'General',
+            checkedIn: a.checkedIn || false,
+            checkedInAt: a.checkedInAt ? new Date(a.checkedInAt).toISOString() : undefined,
+            badgePrinted: a.badgePrinted || false,
+            badgePrintedAt: a.badgePrintedAt ? new Date(a.badgePrintedAt).toISOString() : undefined,
+            qrCode: a.externalId || a.id,
+            customFields: (a.customFields as Record<string, any>) || undefined,
+            syncStatus: 'synced' as const,
+            lastModified: new Date().toISOString(),
+          }));
+          await offlineDB.bulkSaveAttendees(offlineAttendees);
+
+          // Cache event data if we have the event info
+          if (eventData?.customerId) {
+            const offlineEvent: OfflineEvent = {
+              id: eventId,
+              name: `Event ${eventId}`, // Will be overwritten by actual event name if available
+              date: new Date().toISOString(),
+              customerId: eventData.customerId,
+              selectedTemplates: [],
+              settings: {},
+              syncStatus: 'synced' as const,
+              lastModified: new Date().toISOString(),
+            };
+            // Check if we already have a cached event with more info
+            const existingEvent = await offlineDB.getEvent(eventId);
+            if (!existingEvent) {
+              await offlineDB.saveEvent(offlineEvent);
+            }
+          }
+
+          // Update pre-cache status so kiosk knows data is available
+          await offlineDB.saveAppState(`precache_${eventId}`, {
+            timestamp: new Date().toISOString(),
+            attendeesCount: offlineAttendees.length,
+            templatesCount: 0, // Templates are cached separately
+          });
+
+          console.log(`[EventAttendees] Cached ${offlineAttendees.length} attendees to IndexedDB for offline kiosk use`);
+        } catch (err) {
+          console.warn('[EventAttendees] Failed to cache attendees to IndexedDB:', err);
+        }
+      })();
+    }
+  }, [attendees, eventId, eventData?.customerId]);
 
   const eventAttendeeTypes = useMemo(() => {
     const typesFromEvent = new Set<string>();

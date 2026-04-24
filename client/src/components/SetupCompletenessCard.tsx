@@ -86,10 +86,12 @@ export function SetupCompletenessCard({
   };
 
   const renderConfiguredItem = (item: SetupItem) => {
+    const isClickable = !!item.fixRoute;
     return (
       <div
         key={item.id}
-        className="flex items-center gap-2.5 rounded-md px-3 py-2 border border-transparent bg-muted/30"
+        className={`flex items-center gap-2.5 rounded-md px-3 py-2 border border-transparent bg-muted/30 ${isClickable ? "cursor-pointer hover:bg-muted/50 transition-colors" : ""}`}
+        onClick={isClickable ? () => setLocation(item.fixRoute!) : undefined}
       >
         <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
         <div className="flex-1 min-w-0">
@@ -102,6 +104,20 @@ export function SetupCompletenessCard({
         >
           Configured
         </Badge>
+        {isClickable && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="flex-shrink-0 text-xs px-2 h-6 text-muted-foreground hover:text-foreground"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLocation(item.fixRoute!);
+            }}
+          >
+            Edit
+            <ChevronRight className="h-3 w-3 ml-0.5" />
+          </Button>
+        )}
       </div>
     );
   };
@@ -112,7 +128,8 @@ export function SetupCompletenessCard({
     return (
       <div
         key={item.id}
-        className="flex items-center gap-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-card pl-0 pr-3 py-2.5 border-l-[3px] border-l-amber-500"
+        className={`flex items-center gap-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-card pl-0 pr-3 py-2.5 border-l-[3px] border-l-amber-500 ${isClickable ? "cursor-pointer hover:bg-amber-50/50 dark:hover:bg-amber-950/20 transition-colors" : ""}`}
+        onClick={isClickable ? () => handleItemClick(item) : undefined}
       >
         <div className="pl-3 flex-shrink-0">
           <div className="flex items-center justify-center h-8 w-8 rounded-full bg-amber-100 dark:bg-amber-900/30">

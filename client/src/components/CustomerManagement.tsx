@@ -44,6 +44,7 @@ import { useNavigation } from "@/contexts/NavigationContext";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Customer {
   id: string;
@@ -79,6 +80,8 @@ export default function CustomerManagement() {
   const [, setLocation] = useLocation();
   const { setSelectedCustomer } = useNavigation();
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canManageAccounts = user?.role === "super_admin";
 
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
@@ -267,7 +270,7 @@ export default function CustomerManagement() {
             Manage customer organizations and their access
           </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={(open) => {
+        {canManageAccounts && <Dialog open={dialogOpen} onOpenChange={(open) => {
           setDialogOpen(open);
           if (!open) setFormData({ name: "", email: "", apiBaseUrl: "", licenseType: "basic", licensePlan: "", licenseNotes: "", licenseEndDate: "" });
         }}>
@@ -462,7 +465,7 @@ export default function CustomerManagement() {
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+        </Dialog>}
       </div>
 
       {isLoading && (
@@ -499,11 +502,11 @@ export default function CustomerManagement() {
                   </CardDescription>
                 </div>
               </div>
-              <DropdownMenu>
+              {canManageAccounts ? <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     data-testid={`button-customer-actions-${customer.id}`}
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -546,7 +549,7 @@ export default function CustomerManagement() {
                     </>
                   )}
                 </DropdownMenuContent>
-              </DropdownMenu>
+              </DropdownMenu> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
             </CardHeader>
             <CardContent className="space-y-3">
               {customer.apiBaseUrl && (

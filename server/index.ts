@@ -39,8 +39,9 @@ app.use(cors({
   maxAge: 600,
 }));
 
+const skipHttpsHeaders = isDev || process.env.DISABLE_HTTPS_UPGRADE === 'true';
 app.use(helmet({
-  contentSecurityPolicy: isDev ? false : {
+  contentSecurityPolicy: skipHttpsHeaders ? false : {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
@@ -56,6 +57,7 @@ app.use(helmet({
       upgradeInsecureRequests: [],
     },
   },
+  hsts: skipHttpsHeaders ? false : undefined,
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" },

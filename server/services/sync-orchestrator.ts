@@ -14,6 +14,7 @@ import { createChildLogger } from '../logger';
 import { ApiClient } from './api-client';
 import { storage } from '../storage';
 import type { CustomerIntegration, EventCodeMapping, IntegrationEndpointConfig } from '@shared/schema';
+import { getProviderSpec, type IncrementalFilterSpec } from '@shared/integration-providers';
 
 const logger = createChildLogger('SyncOrchestrator');
 
@@ -45,7 +46,7 @@ function formatCertainTimestamp(date: Date): string {
   const HH = String(date.getUTCHours()).padStart(2, '0');
   const mm = String(date.getUTCMinutes()).padStart(2, '0');
   const ss = String(date.getUTCSeconds()).padStart(2, '0');
-  return `${yyyy}/${MM}/${dd} ${HH}:${mm}:${ss}`;
+  return `${yyyy}-${MM}-${dd}T${HH}:${mm}:${ss}`;
 }
 
 interface SyncConfig {
@@ -1191,6 +1192,115 @@ class SyncOrchestrator {
   }
 
   /**
+   * Format a timestamp according to the provider's specified format.
+   */
+  private formatTimestampForProvider(date: Date, format: IncrementalFilterSpec['timestampFormat']): string {
+    switch (format) {
+      case 'certain':
+        return formatCertainTimestamp(date);
+      case 'iso8601':
+        return date.toISOString();
+      case 'unix':
+        return String(Math.floor(date.getTime() / 1000));
+      default:
+        return formatCertainTimestamp(date);
+    }
+  }
+
+  /**
+   * Auto-append incremental sync filter to a URL based on provider config.
+   *
+   * Looks up the provider's `incrementalFilter` for the given data type and,
+   * if a lastSyncTimestamp is available, appends the appropriate query parameter.
+   * Falls back to the existing behavior (no filter appended) when:
+   * - The provider has no incrementalFilter for this data type
+   * - lastSyncTimestamp is null/empty (first sync)
+   * - The URL already contains the filter param (e.g. from legacy {{lastSyncTimestamp}} template)
+   *
+   * @param url The fully resolved API URL (with base URL)
+   * @param providerId The integration provider ID (e.g. 'certain_oauth', 'certain')
+   * @param dataType The data type being synced ('events', 'attendees', 'sessions', 'session_registrations')
+   * @param lastSyncTimestamp The last sync timestamp (ISO string, Certain format, or null)
+   * @returns The URL with incremental filter appended (or unchanged)
+   */
+  applyIncrementalFilter(
+    url: string,
+    providerId: string,
+    dataType: string,
+    lastSyncTimestamp: string | null | undefined,
+  ): string {
+    // Feature flag: incremental sync is disabled by default until coordinated rollout
+    if (process.env.ENABLE_INCREMENTAL_SYNC !== 'true') {
+      return url;
+    }
+
+    // No timestamp means first sync — pull everything
+    if (!lastSyncTimestamp || lastSyncTimestamp.trim() === '') {
+      logger.info(`[incrementalFilter] No lastSyncTimestamp for ${dataType} — performing full sync`);
+      return url;
+    }
+
+    // Look up provider spec
+    const providerSpec = getProviderSpec(providerId);
+    if (!providerSpec) {
+      logger.debug(`[incrementalFilter] No provider spec found for "${providerId}" — skipping filter`);
+      return url;
+    }
+
+    // Map session_registrations to the sessions data type for filter lookup,
+    // since session_registrations typically use the same filter as sessions.
+    // If a provider defines a separate session_registrations data type, use it.
+    const lookupDataType = dataType === 'session_registrations' ? 'sessions' : dataType;
+
+    // Get the endpoint spec for this data type
+    const dataTypeSpec = providerSpec.dataTypes[lookupDataType as keyof typeof providerSpec.dataTypes];
+    if (!dataTypeSpec) {
+      logger.debug(`[incrementalFilter] No dataType spec for "${lookupDataType}" on provider "${providerId}" — skipping filter`);
+      return url;
+    }
+
+    const incrementalFilter = dataTypeSpec.endpoint.incrementalFilter;
+    if (!incrementalFilter) {
+      logger.debug(`[incrementalFilter] No incrementalFilter defined for ${providerId}/${lookupDataType} — performing full sync`);
+      return url;
+    }
+
+    // Check if URL already contains this filter param (from legacy template substitution)
+    if (url.includes(`${incrementalFilter.paramName}=`)) {
+      logger.debug(`[incrementalFilter] URL already contains "${incrementalFilter.paramName}" — skipping auto-append`);
+      return url;
+    }
+
+    // Parse the timestamp and format it for the provider
+    let formattedTimestamp: string;
+    try {
+      const date = new Date(lastSyncTimestamp);
+      if (isNaN(date.getTime())) {
+        logger.warn(`[incrementalFilter] Invalid lastSyncTimestamp "${lastSyncTimestamp}" — performing full sync`);
+        return url;
+      }
+      formattedTimestamp = this.formatTimestampForProvider(date, incrementalFilter.timestampFormat);
+    } catch {
+      logger.warn(`[incrementalFilter] Failed to parse lastSyncTimestamp "${lastSyncTimestamp}" — performing full sync`);
+      return url;
+    }
+
+    // Build the filter value by replacing {timestamp} in the expression
+    const filterValue = incrementalFilter.filterExpression.replace('{timestamp}', formattedTimestamp);
+
+    // Append as query parameter
+    const separator = url.includes('?') ? '&' : '?';
+    const filteredUrl = `${url}${separator}${incrementalFilter.paramName}=${filterValue}`;
+
+    logger.info(
+      `[incrementalFilter] Applied incremental filter for ${providerId}/${dataType}: ` +
+      `${incrementalFilter.paramName}=${filterValue}`
+    );
+
+    return filteredUrl;
+  }
+
+  /**
    * Calculate next sync time based on event dates and sync settings
    * Uses smart scheduling: daily before event, minute-level during event
    */
@@ -1336,15 +1446,18 @@ class SyncOrchestrator {
               const preparedEndpoint = this.prepareEndpointForSync(endpoint, attendeesLastTimestamp);
               const baseUrl = integration.baseUrl.replace(/\/$/, '');
               let endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
-              const url = `${baseUrl}${endpointPath}`;
-              
+              let url = `${baseUrl}${endpointPath}`;
+
+              // Auto-append provider-defined incremental filter (if available)
+              url = this.applyIncrementalFilter(url, integration.providerId, 'attendees', attendeesLastTimestamp);
+
               logger.info(`Fetching attendees for event ${event.name}: ${url}`);
-              
+
               const response = await fetch(url, {
                 method: 'GET',
                 headers: { 'Accept': 'application/json', ...authHeaders },
               });
-              
+
               const isAttendees404 = !response.ok && response.status === 404;
               
               if (response.ok || isAttendees404) {
@@ -1499,15 +1612,18 @@ class SyncOrchestrator {
               const preparedEndpoint = this.prepareEndpointForSync(endpoint, sessionsLastTimestamp);
               const baseUrl = integration.baseUrl.replace(/\/$/, '');
               let endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
-              const url = `${baseUrl}${endpointPath}`;
-              
+              let url = `${baseUrl}${endpointPath}`;
+
+              // Auto-append provider-defined incremental filter (if available)
+              url = this.applyIncrementalFilter(url, integration.providerId, 'sessions', sessionsLastTimestamp);
+
               logger.info(`Fetching sessions for event ${event.name}: ${url}`);
-              
+
               const response = await fetch(url, {
                 method: 'GET',
                 headers: { 'Accept': 'application/json', ...authHeaders },
               });
-              
+
               const is404NoData = !response.ok && response.status === 404;
               
               if (response.ok || is404NoData) {
@@ -1648,25 +1764,28 @@ class SyncOrchestrator {
                 if (endpoint) {
                   const attendeeEndpoint = this.prepareEndpointForAttendee(endpoint, attendee.externalId);
                   if (!attendeeEndpoint) continue;
-                  
+
                   const preparedEndpoint = this.prepareEndpointForSync(attendeeEndpoint, regLastTimestamp);
                   const baseUrl = integration.baseUrl.replace(/\/$/, '');
                   let endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
-                  const url = `${baseUrl}${endpointPath}`;
-                  
+                  let url = `${baseUrl}${endpointPath}`;
+
+                  // Auto-append provider-defined incremental filter (if available)
+                  url = this.applyIncrementalFilter(url, integration.providerId, 'session_registrations', regLastTimestamp);
+
                   const response = await fetch(url, {
                     method: 'GET',
                     headers: { 'Accept': 'application/json', ...authHeaders },
                   });
-                  
+
                   const isRegEmpty404 = !response.ok && response.status === 404;
-                  
+
                   if (response.ok || isRegEmpty404) {
                     let registrations: any[] = [];
-                    
+
                     if (response.ok) {
                       const data = await safeJsonParse(response, `Session registrations for attendee ${attendee.externalId}`);
-                      registrations = Array.isArray(data) ? data : 
+                      registrations = Array.isArray(data) ? data :
                         (data.results || data.data || data.registrations || data.functionRegistrations || []);
                     }
                     
@@ -1729,15 +1848,18 @@ class SyncOrchestrator {
                 const preparedEndpoint = this.prepareEndpointForSync(endpoint, regLastTimestamp);
                 const baseUrl = integration.baseUrl.replace(/\/$/, '');
                 let endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
-                const url = `${baseUrl}${endpointPath}`;
-                
+                let url = `${baseUrl}${endpointPath}`;
+
+                // Auto-append provider-defined incremental filter (if available)
+                url = this.applyIncrementalFilter(url, integration.providerId, 'session_registrations', regLastTimestamp);
+
                 logger.info(`Fetching session registrations for event ${event.name}: ${url}`);
-                
+
                 const response = await fetch(url, {
                   method: 'GET',
                   headers: { 'Accept': 'application/json', ...authHeaders },
                 });
-                
+
                 const isBulkRegEmpty404 = !response.ok && response.status === 404;
                 
                 if (response.ok || isBulkRegEmpty404) {
@@ -2158,6 +2280,560 @@ class SyncOrchestrator {
     }
 
     return payload;
+  }
+
+  // ─── Per-Event Sync Methods (Tier 2+3) ──────────────────────────────────────
+  // These are called by the sync scheduler for individual event + data type jobs.
+  // They do NOT iterate events — they operate on exactly one event at a time.
+
+  /**
+   * Sync attendees for a single event from the external platform.
+   *
+   * Resolves the API endpoint from the integration's syncTemplates, fetches
+   * attendees (with incremental sync via lastSyncTimestamp), transforms and
+   * upserts each record, and returns detailed counts.
+   */
+  async syncSingleEventAttendees(params: {
+    integration: any;
+    event: any;
+    authHeaders: Record<string, string>;
+    syncState: any;
+  }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
+    const { integration, event, authHeaders, syncState } = params;
+    const startTime = Date.now();
+    const syncTemplates = integration.syncTemplates as any;
+
+    let processedCount = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
+    let errorCount = 0;
+    const errors: Array<{ record: any; error: string }> = [];
+
+    try {
+      if (!syncTemplates?.attendees?.endpointPath) {
+        logger.info(`No attendees endpoint template configured for integration ${integration.id}`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      if (!event.accountCode || !event.eventCode) {
+        logger.info(`Event ${event.id} (${event.name}) missing accountCode or eventCode — skipping attendee sync`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      // Resolve the endpoint template with event codes
+      const endpoint = this.buildResolvedEndpoint(
+        syncTemplates.attendees.endpointPath,
+        { accountCode: event.accountCode, eventCode: event.eventCode }
+      );
+
+      if (!endpoint) {
+        logger.warn(`Could not resolve attendee endpoint for event ${event.id}`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      // Apply legacy template-based incremental sync timestamp
+      const lastTimestamp = syncState?.lastSyncTimestamp || null;
+      const preparedEndpoint = this.prepareEndpointForSync(endpoint, lastTimestamp);
+      const baseUrl = integration.baseUrl.replace(/\/$/, '');
+      const endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
+      let url = `${baseUrl}${endpointPath}`;
+
+      // Auto-append provider-defined incremental filter (if available)
+      url = this.applyIncrementalFilter(url, integration.providerId, 'attendees', lastTimestamp);
+
+      logger.info(`[syncSingleEventAttendees] event=${event.name} (${event.id}) url=${url}`);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', ...authHeaders },
+      });
+
+      const is404 = !response.ok && response.status === 404;
+
+      if (!response.ok && !is404) {
+        const errBody = await response.text().catch(() => '');
+        const msg = `API returned ${response.status} for attendees on event ${event.name}: ${errBody.substring(0, 300)}`;
+        logger.error(msg);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 1, errors: [{ record: null, error: msg }] };
+      }
+
+      let attendees: any[] = [];
+      if (response.ok) {
+        const data = await safeJsonParse(response, `Attendees sync for ${event.name}`);
+        attendees = Array.isArray(data) ? data :
+          (data.results || data.data || data.attendees || data.registrations || []);
+      } else {
+        logger.info(`API returned 404 for attendees on ${event.name} — treating as empty (no new data)`);
+      }
+
+      logger.info(`[syncSingleEventAttendees] event=${event.name} received ${attendees.length} attendees`);
+
+      const evtSyncSettings = event.syncSettings as { selectedStatuses?: string[] } | null;
+
+      for (const rawAttendee of attendees) {
+        try {
+          const attendeeData = this.transformCertainAttendee(rawAttendee);
+          if (!attendeeData.externalId) continue;
+
+          const isAttended = (attendeeData.registrationStatus || '').toLowerCase() === 'attended';
+
+          const existing = await storage.getAttendeeByExternalId(event.id, attendeeData.externalId);
+          if (existing) {
+            const updatePayload: any = {
+              ...attendeeData,
+              registrationStatusLabel: attendeeData.registrationStatusLabel || null,
+            };
+            if (existing.checkedIn) {
+              updatePayload.registrationStatus = 'Attended';
+              updatePayload.registrationStatusLabel = attendeeData.registrationStatusLabel || existing.registrationStatusLabel || null;
+            } else if (isAttended) {
+              updatePayload.checkedIn = true;
+              updatePayload.checkedInAt = existing.checkedInAt || new Date();
+            }
+            await storage.updateAttendee(existing.id, updatePayload);
+
+            // Stamp billableAt if not already set and attendee matches selected statuses
+            if (!(existing as any).billableAt) {
+              const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+              if (selectedStatuses && selectedStatuses.length > 0) {
+                const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+                if (status && selectedStatuses.includes(status)) {
+                  await storage.updateAttendee(existing.id, { billableAt: new Date() } as any);
+                }
+              }
+            }
+            updatedCount++;
+          } else {
+            const createPayload: any = {
+              eventId: event.id,
+              firstName: attendeeData.firstName,
+              lastName: attendeeData.lastName,
+              email: attendeeData.email,
+              company: attendeeData.company || null,
+              title: attendeeData.title || null,
+              participantType: attendeeData.participantType || 'General',
+              externalId: attendeeData.externalId,
+              externalProfileId: attendeeData.externalProfileId || null,
+              registrationStatus: attendeeData.registrationStatus || 'Registered',
+              registrationStatusLabel: attendeeData.registrationStatusLabel || null,
+              orderCode: attendeeData.orderCode || null,
+            };
+            if (isAttended) {
+              createPayload.checkedIn = true;
+              createPayload.checkedInAt = new Date();
+            }
+            const newAttendee = await storage.createAttendee(createPayload);
+
+            // Stamp billableAt if event has status selection configured and this attendee matches
+            const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
+            if (selectedStatuses && selectedStatuses.length > 0 && newAttendee) {
+              const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
+              if (status && selectedStatuses.includes(status)) {
+                await storage.updateAttendee(newAttendee.id, { billableAt: new Date() } as any);
+              }
+            }
+            createdCount++;
+          }
+          processedCount++;
+        } catch (e) {
+          errorCount++;
+          errors.push({ record: rawAttendee, error: (e as Error).message });
+          logger.warn({ err: e }, `[syncSingleEventAttendees] Failed to save attendee for ${event.name}`);
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      logger.info(
+        `[syncSingleEventAttendees] event=${event.name} done — ` +
+        `processed=${processedCount} created=${createdCount} updated=${updatedCount} errors=${errorCount} ` +
+        `duration=${durationMs}ms`
+      );
+
+      return { processedCount, createdCount, updatedCount, errorCount, errors: errors.length > 0 ? errors : undefined };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const msg = (error as Error).message;
+      logger.error({ err: error }, `[syncSingleEventAttendees] Fatal error for event ${event.name} after ${durationMs}ms`);
+      return { processedCount, createdCount, updatedCount, errorCount: errorCount + 1, errors: [...errors, { record: null, error: msg }] };
+    }
+  }
+
+  /**
+   * Sync sessions for a single event from the external platform.
+   *
+   * Resolves the API endpoint from the integration's syncTemplates, fetches
+   * sessions (with incremental sync via lastSyncTimestamp), transforms and
+   * upserts each session record, and returns detailed counts.
+   */
+  async syncSingleEventSessions(params: {
+    integration: any;
+    event: any;
+    authHeaders: Record<string, string>;
+    syncState: any;
+  }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
+    const { integration, event, authHeaders, syncState } = params;
+    const startTime = Date.now();
+    const syncTemplates = integration.syncTemplates as any;
+
+    let processedCount = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
+    let errorCount = 0;
+    const errors: Array<{ record: any; error: string }> = [];
+
+    try {
+      if (!syncTemplates?.sessions?.endpointPath) {
+        logger.info(`No sessions endpoint template configured for integration ${integration.id}`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      if (!event.accountCode || !event.eventCode) {
+        logger.info(`Event ${event.id} (${event.name}) missing accountCode or eventCode — skipping session sync`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      const endpoint = this.buildResolvedEndpoint(
+        syncTemplates.sessions.endpointPath,
+        { accountCode: event.accountCode, eventCode: event.eventCode }
+      );
+
+      if (!endpoint) {
+        logger.warn(`Could not resolve session endpoint for event ${event.id}`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      const lastTimestamp = syncState?.lastSyncTimestamp || null;
+      const preparedEndpoint = this.prepareEndpointForSync(endpoint, lastTimestamp);
+      const baseUrl = integration.baseUrl.replace(/\/$/, '');
+      const endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
+      let url = `${baseUrl}${endpointPath}`;
+
+      // Auto-append provider-defined incremental filter (if available)
+      url = this.applyIncrementalFilter(url, integration.providerId, 'sessions', lastTimestamp);
+
+      logger.info(`[syncSingleEventSessions] event=${event.name} (${event.id}) url=${url}`);
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', ...authHeaders },
+      });
+
+      const is404 = !response.ok && response.status === 404;
+
+      if (!response.ok && !is404) {
+        const errBody = await response.text().catch(() => '');
+        const msg = `API returned ${response.status} for sessions on event ${event.name}: ${errBody.substring(0, 300)}`;
+        logger.error(msg);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 1, errors: [{ record: null, error: msg }] };
+      }
+
+      let sessions: any[] = [];
+      if (response.ok) {
+        const data = await safeJsonParse(response, `Sessions sync for ${event.name}`);
+        sessions = Array.isArray(data) ? data :
+          (data.results || data.data || data.sessions || data.functions || []);
+      } else {
+        logger.info(`API returned 404 for sessions on ${event.name} — treating as empty (no new data)`);
+      }
+
+      logger.info(`[syncSingleEventSessions] event=${event.name} received ${sessions.length} sessions`);
+      if (sessions.length > 0) {
+        logger.debug('Sample session:', JSON.stringify(sessions[0], null, 2));
+      }
+
+      for (const rawSession of sessions) {
+        try {
+          const transformed = this.transformCertainSession(rawSession);
+          if (!transformed.externalId) continue;
+
+          const existing = await storage.getSessionByExternalId(event.id, transformed.externalId);
+
+          const sessionData = {
+            eventId: event.id,
+            externalId: transformed.externalId,
+            instanceId: transformed.instanceId,
+            sessionCode: transformed.sessionCode,
+            name: transformed.name,
+            description: transformed.description,
+            location: transformed.location,
+            venue: transformed.venue,
+            trackName: transformed.trackName,
+            trackColor: transformed.trackColor,
+            typeName: transformed.typeName,
+            startTime: transformed.startTime,
+            endTime: transformed.endTime,
+            capacity: transformed.capacity,
+            status: transformed.isActive ? 'active' : 'inactive',
+          };
+
+          if (existing) {
+            await storage.updateSession(existing.id, sessionData);
+            updatedCount++;
+          } else {
+            await storage.createSession(sessionData as any);
+            createdCount++;
+          }
+          processedCount++;
+        } catch (e) {
+          errorCount++;
+          errors.push({ record: rawSession, error: (e as Error).message });
+          logger.warn({ err: e }, `[syncSingleEventSessions] Failed to save session for ${event.name}`);
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      logger.info(
+        `[syncSingleEventSessions] event=${event.name} done — ` +
+        `processed=${processedCount} created=${createdCount} updated=${updatedCount} errors=${errorCount} ` +
+        `duration=${durationMs}ms`
+      );
+
+      return { processedCount, createdCount, updatedCount, errorCount, errors: errors.length > 0 ? errors : undefined };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const msg = (error as Error).message;
+      logger.error({ err: error }, `[syncSingleEventSessions] Fatal error for event ${event.name} after ${durationMs}ms`);
+      return { processedCount, createdCount, updatedCount, errorCount: errorCount + 1, errors: [...errors, { record: null, error: msg }] };
+    }
+  }
+
+  /**
+   * Sync session registrations for a single event from the external platform.
+   *
+   * Handles both per-attendee iteration (when the endpoint template contains
+   * {{attendeeExternalId}}) and bulk endpoints. Depends on sessions and
+   * attendees already existing in the database.
+   */
+  async syncSingleEventSessionRegistrations(params: {
+    integration: any;
+    event: any;
+    authHeaders: Record<string, string>;
+    syncState: any;
+  }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
+    const { integration, event, authHeaders, syncState } = params;
+    const startTime = Date.now();
+    const syncTemplates = integration.syncTemplates as any;
+
+    let processedCount = 0;
+    let createdCount = 0;
+    let updatedCount = 0;
+    let errorCount = 0;
+    const errors: Array<{ record: any; error: string }> = [];
+
+    try {
+      if (!syncTemplates?.sessionRegistrations?.endpointPath) {
+        logger.info(`No session registrations endpoint template configured for integration ${integration.id}`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      if (!event.accountCode || !event.eventCode) {
+        logger.info(`Event ${event.id} (${event.name}) missing accountCode or eventCode — skipping session registration sync`);
+        return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+      }
+
+      const lastTimestamp = syncState?.lastSyncTimestamp || null;
+      const requiresAttendeeIteration = this.templateRequiresAttendeeIteration(
+        syncTemplates.sessionRegistrations.endpointPath
+      );
+
+      if (requiresAttendeeIteration) {
+        // Per-attendee iteration: one API call per attendee
+        const attendees = await storage.getAttendees(event.id);
+        const attendeesWithExternalId = attendees.filter(a => a.externalId);
+
+        logger.info(
+          `[syncSingleEventSessionRegistrations] event=${event.name} — per-attendee mode, ` +
+          `${attendeesWithExternalId.length}/${attendees.length} attendees have externalId`
+        );
+
+        for (const attendee of attendeesWithExternalId) {
+          const endpoint = this.buildResolvedEndpoint(
+            syncTemplates.sessionRegistrations.endpointPath,
+            { accountCode: event.accountCode, eventCode: event.eventCode }
+          );
+
+          if (!endpoint) continue;
+
+          const attendeeEndpoint = this.prepareEndpointForAttendee(endpoint, attendee.externalId);
+          if (!attendeeEndpoint) continue;
+
+          const preparedEndpoint = this.prepareEndpointForSync(attendeeEndpoint, lastTimestamp);
+          const baseUrl = integration.baseUrl.replace(/\/$/, '');
+          const endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
+          let url = `${baseUrl}${endpointPath}`;
+
+          // Auto-append provider-defined incremental filter (if available)
+          url = this.applyIncrementalFilter(url, integration.providerId, 'session_registrations', lastTimestamp);
+
+          try {
+            const response = await fetch(url, {
+              method: 'GET',
+              headers: { 'Accept': 'application/json', ...authHeaders },
+            });
+
+            const is404 = !response.ok && response.status === 404;
+
+            if (!response.ok && !is404) {
+              errorCount++;
+              errors.push({ record: { attendeeId: attendee.id }, error: `API returned ${response.status}` });
+              continue;
+            }
+
+            let registrations: any[] = [];
+            if (response.ok) {
+              const data = await safeJsonParse(response, `Session registrations for attendee ${attendee.externalId}`);
+              registrations = Array.isArray(data) ? data :
+                (data.results || data.data || data.registrations || data.functionRegistrations || []);
+            }
+
+            for (const rawReg of registrations) {
+              try {
+                const sessionExternalId = String(rawReg.instanceId || rawReg.sessionId || rawReg.functionInstanceId || '');
+                if (!sessionExternalId) continue;
+
+                const session = await storage.getSessionByExternalId(event.id, sessionExternalId);
+                if (!session) continue;
+
+                const existing = await storage.getSessionRegistrationByAttendee(session.id, attendee.id);
+                const status = rawReg.status || rawReg.registrationStatus ||
+                  (rawReg.isWaitlisted ? 'waitlisted' : 'registered');
+
+                if (existing) {
+                  await storage.updateSessionRegistration(existing.id, { status });
+                  updatedCount++;
+                } else {
+                  await storage.createSessionRegistration({
+                    sessionId: session.id,
+                    attendeeId: attendee.id,
+                    status,
+                  });
+                  createdCount++;
+                }
+                processedCount++;
+              } catch (e) {
+                errorCount++;
+                errors.push({ record: rawReg, error: (e as Error).message });
+                logger.warn({ err: e }, `[syncSingleEventSessionRegistrations] Failed to save registration`);
+              }
+            }
+          } catch (e) {
+            errorCount++;
+            errors.push({ record: { attendeeId: attendee.id }, error: (e as Error).message });
+          }
+        }
+      } else {
+        // Bulk endpoint: single API call returns all registrations for the event
+        const endpoint = this.buildResolvedEndpoint(
+          syncTemplates.sessionRegistrations.endpointPath,
+          { accountCode: event.accountCode, eventCode: event.eventCode }
+        );
+
+        if (!endpoint) {
+          logger.warn(`Could not resolve session registration endpoint for event ${event.id}`);
+          return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
+        }
+
+        const preparedEndpoint = this.prepareEndpointForSync(endpoint, lastTimestamp);
+        const baseUrl = integration.baseUrl.replace(/\/$/, '');
+        const endpointPath = preparedEndpoint.startsWith('/') ? preparedEndpoint : `/${preparedEndpoint}`;
+        let url = `${baseUrl}${endpointPath}`;
+
+        // Auto-append provider-defined incremental filter (if available)
+        url = this.applyIncrementalFilter(url, integration.providerId, 'session_registrations', lastTimestamp);
+
+        logger.info(`[syncSingleEventSessionRegistrations] event=${event.name} (${event.id}) url=${url}`);
+
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json', ...authHeaders },
+        });
+
+        const is404 = !response.ok && response.status === 404;
+
+        if (!response.ok && !is404) {
+          const errBody = await response.text().catch(() => '');
+          const msg = `API returned ${response.status} for session registrations on event ${event.name}: ${errBody.substring(0, 300)}`;
+          logger.error(msg);
+          return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 1, errors: [{ record: null, error: msg }] };
+        }
+
+        let registrations: any[] = [];
+        if (response.ok) {
+          const data = await safeJsonParse(response, `Bulk session registrations for ${event.name}`);
+          registrations = Array.isArray(data) ? data :
+            (data.results || data.data || data.registrations || data.functionRegistrations || []);
+        } else {
+          logger.info(`API returned 404 for session registrations on ${event.name} — treating as empty`);
+        }
+
+        logger.info(`[syncSingleEventSessionRegistrations] event=${event.name} received ${registrations.length} registration records`);
+        if (registrations.length > 0) {
+          logger.debug('Sample registration:', JSON.stringify(registrations[0], null, 2));
+        }
+
+        for (const rawReg of registrations) {
+          try {
+            const attendeeExternalId = String(rawReg.registrationCode || rawReg.attendeeId || rawReg.pkRegId || '');
+            if (!attendeeExternalId) continue;
+
+            const attendee = await storage.getAttendeeByExternalId(event.id, attendeeExternalId);
+            if (!attendee) continue;
+
+            // Handle nested sessions array (Certain API format)
+            const sessionsArray = rawReg.sessions || [];
+
+            for (const sessionReg of sessionsArray) {
+              try {
+                const sessionExternalId = String(sessionReg.instanceId || sessionReg.sessionId || '');
+                if (!sessionExternalId) continue;
+
+                const session = await storage.getSessionByExternalId(event.id, sessionExternalId);
+                if (!session) continue;
+
+                const existing = await storage.getSessionRegistrationByAttendee(session.id, attendee.id);
+                const status = sessionReg.regSessionStatus?.toLowerCase() ||
+                  sessionReg.status || 'registered';
+
+                if (existing) {
+                  await storage.updateSessionRegistration(existing.id, { status });
+                  updatedCount++;
+                } else {
+                  await storage.createSessionRegistration({
+                    sessionId: session.id,
+                    attendeeId: attendee.id,
+                    status,
+                  });
+                  createdCount++;
+                }
+                processedCount++;
+              } catch (e) {
+                errorCount++;
+                errors.push({ record: sessionReg, error: (e as Error).message });
+                logger.warn({ err: e }, `[syncSingleEventSessionRegistrations] Failed to save registration`);
+              }
+            }
+          } catch (e) {
+            errorCount++;
+            errors.push({ record: rawReg, error: (e as Error).message });
+            logger.warn({ err: e }, `[syncSingleEventSessionRegistrations] Failed to process registration record`);
+          }
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      logger.info(
+        `[syncSingleEventSessionRegistrations] event=${event.name} done — ` +
+        `processed=${processedCount} created=${createdCount} updated=${updatedCount} errors=${errorCount} ` +
+        `duration=${durationMs}ms`
+      );
+
+      return { processedCount, createdCount, updatedCount, errorCount, errors: errors.length > 0 ? errors : undefined };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const msg = (error as Error).message;
+      logger.error({ err: error }, `[syncSingleEventSessionRegistrations] Fatal error for event ${event.name} after ${durationMs}ms`);
+      return { processedCount, createdCount, updatedCount, errorCount: errorCount + 1, errors: [...errors, { record: null, error: msg }] };
+    }
   }
 }
 

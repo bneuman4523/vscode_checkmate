@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,6 +25,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   Plus,
   RefreshCw,
@@ -31,9 +34,17 @@ import {
   Copy,
   Loader2,
   Lock,
+  ChevronDown,
+  ChevronRight,
+  Calendar,
+  Users,
+  Layers,
+  FileText,
+  Shield,
 } from "lucide-react";
 import type { IntegrationProvider, Customer } from "@shared/schema";
 import type { RealtimeSyncConfig, SyncTemplates, DefaultSyncSettings } from "./types";
+import { INTEGRATION_PROVIDERS } from "@shared/integration-providers";
 
 interface IntegrationConfigDialogProps {
   open: boolean;
@@ -45,6 +56,7 @@ interface IntegrationConfigDialogProps {
   providers: IntegrationProvider[];
   customer: Customer | undefined;
   canEditSettings: boolean;
+  isSuperAdmin: boolean;
   syncSettingsEditable: boolean;
   onSyncSettingsEditableChange: (editable: boolean) => void;
   integrationName: string;
@@ -101,6 +113,7 @@ export function IntegrationConfigDialog({
   providers,
   customer,
   canEditSettings,
+  isSuperAdmin,
   syncSettingsEditable,
   onSyncSettingsEditableChange,
   integrationName,
@@ -216,8 +229,11 @@ export function IntegrationConfigDialog({
           <TabsContent value="sync" className="space-y-4">
             <SyncTab
               canEditSettings={canEditSettings}
+              isSuperAdmin={isSuperAdmin}
               syncSettingsEditable={syncSettingsEditable}
               onSyncSettingsEditableChange={onSyncSettingsEditableChange}
+              selectedProvider={selectedProvider}
+              accountCode={accountCode}
               eventListEndpointPath={eventListEndpointPath}
               onEventListEndpointPathChange={onEventListEndpointPathChange}
               syncTemplates={syncTemplates}
@@ -742,8 +758,11 @@ function EditableSettingsLock({
 
 function SyncTab({
   canEditSettings,
+  isSuperAdmin,
   syncSettingsEditable,
   onSyncSettingsEditableChange,
+  selectedProvider,
+  accountCode,
   eventListEndpointPath,
   onEventListEndpointPathChange,
   syncTemplates,
@@ -752,8 +771,11 @@ function SyncTab({
   onDefaultSyncSettingsChange,
 }: {
   canEditSettings: boolean;
+  isSuperAdmin: boolean;
   syncSettingsEditable: boolean;
   onSyncSettingsEditableChange: (editable: boolean) => void;
+  selectedProvider: IntegrationProvider | null;
+  accountCode: string;
   eventListEndpointPath: string;
   onEventListEndpointPathChange: (value: string) => void;
   syncTemplates: SyncTemplates;
@@ -761,145 +783,408 @@ function SyncTab({
   defaultSyncSettings: DefaultSyncSettings;
   onDefaultSyncSettingsChange: (settings: DefaultSyncSettings) => void;
 }) {
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Derive enabled states from whether sync templates have endpoint paths
+  const eventsEnabled = !!eventListEndpointPath;
+  const attendeesEnabled = !!syncTemplates.attendees?.endpointPath;
+  const sessionsEnabled = !!syncTemplates.sessions?.endpointPath;
+  const sessionRegsEnabled = !!syncTemplates.sessionRegistrations?.endpointPath;
+
+  // Determine if adaptive schedule is in use
+  const isAdaptive = defaultSyncSettings.duringEventIntervalMinutes <= 1
+    && defaultSyncSettings.preEventIntervalMinutes >= 1440;
+
+  // Look up the provider spec for resolved URLs in advanced view
+  const providerSpec = selectedProvider?.id ? INTEGRATION_PROVIDERS[selectedProvider.id] : undefined;
+
+  // Build a resolved URL by substituting accountCode
+  const resolveUrl = (path: string) => {
+    return path
+      .replace(/\{accountCode\}/g, accountCode || "{accountCode}")
+      .replace(/\{\{accountCode\}\}/g, accountCode || "{{accountCode}}");
+  };
+
+  // Toggle handler — when a data type is enabled, set a default endpoint path from the provider spec
+  const handleToggleEvents = (enabled: boolean) => {
+    if (enabled && !eventListEndpointPath && providerSpec?.dataTypes?.events) {
+      onEventListEndpointPathChange(
+        `/certainExternal/service/v1/Event/{{accountCode}}?isActive=true&includeList=tags`
+      );
+    } else if (!enabled) {
+      onEventListEndpointPathChange("");
+    }
+  };
+
+  const handleToggleAttendees = (enabled: boolean) => {
+    if (enabled && !syncTemplates.attendees?.endpointPath) {
+      const defaultPath = providerSpec?.dataTypes?.attendees
+        ? `/certainExternal/service/v1/Registration/{{accountCode}}/{{eventCode}}?max_results=5000`
+        : "/accounts/{{accountCode}}/events/{{eventCode}}/registrations";
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        attendees: { endpointPath: defaultPath },
+      });
+    } else if (!enabled) {
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        attendees: { endpointPath: "" },
+      });
+    }
+  };
+
+  const handleToggleSessions = (enabled: boolean) => {
+    if (enabled && !syncTemplates.sessions?.endpointPath) {
+      const defaultPath = providerSpec?.dataTypes?.sessions
+        ? `/api/standard/2.0/accounts/{{accountCode}}/events/{{eventCode}}/sessions?dateModified_after={{lastSyncTimestamp}}`
+        : "/accounts/{{accountCode}}/events/{{eventCode}}/sessions";
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        sessions: { endpointPath: defaultPath },
+      });
+    } else if (!enabled) {
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        sessions: { endpointPath: "" },
+      });
+    }
+  };
+
+  const handleToggleSessionRegs = (enabled: boolean) => {
+    if (enabled && !syncTemplates.sessionRegistrations?.endpointPath) {
+      const defaultPath = `/api/standard/2.0/accounts/{{accountCode}}/events/{{eventCode}}/registrations`;
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        sessionRegistrations: { endpointPath: defaultPath },
+      });
+    } else if (!enabled) {
+      onSyncTemplatesChange({
+        ...syncTemplates,
+        sessionRegistrations: { endpointPath: "" },
+      });
+    }
+  };
+
+  const handleScheduleChange = (value: string) => {
+    if (value === "adaptive") {
+      onDefaultSyncSettingsChange({
+        preEventIntervalMinutes: 1440,
+        duringEventIntervalMinutes: 1,
+      });
+    }
+    // "fixed" keeps current values but user can edit the interval
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Data Sync Templates</CardTitle>
-        <CardDescription>
-          Configure endpoint templates for syncing events, attendees, sessions, and session registrations.
-          Sync runs in order: Events → Attendees → Sessions → Session Registrations.
-          Use {'{{accountCode}}'}, {'{{eventCode}}'}, {'{{lastSyncTimestamp}}'}, and {'{{attendeeExternalId}}'} as variables.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <EditableSettingsLock
-          editable={syncSettingsEditable}
-          onEditableChange={onSyncSettingsEditableChange}
-          canEdit={canEditSettings}
-          labelId="sync-settings"
-          warningText="Editing enabled. Changes may affect data synchronization."
-        />
-
-        <div className="space-y-2">
-          <Label htmlFor="event-list-endpoint-sync">1. Events Endpoint Path</Label>
-          <Input
-            id="event-list-endpoint-sync"
-            value={eventListEndpointPath}
-            onChange={(e) => onEventListEndpointPathChange(e.target.value)}
-            placeholder="/certainExternal/service/v1/Event/{accountCode}"
-            data-testid="input-event-list-endpoint-sync"
-            disabled={!syncSettingsEditable}
-            className={!syncSettingsEditable ? "bg-muted" : ""}
-          />
-          <p className="text-xs text-muted-foreground">
-            Use <code className="bg-muted px-1 rounded">{"{accountCode}"}</code> as a variable. Example: <code className="bg-muted px-1 rounded">/certainExternal/service/v1/Event/{"{accountCode}"}</code>
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="attendees-endpoint">2. Attendees Endpoint Path</Label>
-          <Input
-            id="attendees-endpoint"
-            value={syncTemplates.attendees?.endpointPath || ""}
-            onChange={(e) => onSyncTemplatesChange({
-              ...syncTemplates,
-              attendees: { endpointPath: e.target.value }
-            })}
-            placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/registrations"
-            data-testid="input-sync-attendees-endpoint"
-            disabled={!syncSettingsEditable}
-            className={!syncSettingsEditable ? "bg-muted" : ""}
-          />
-          <p className="text-xs text-muted-foreground">
-            Path to fetch attendees from the external platform
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="sessions-endpoint">3. Sessions Endpoint Path</Label>
-          <Input
-            id="sessions-endpoint"
-            value={syncTemplates.sessions?.endpointPath || ""}
-            onChange={(e) => onSyncTemplatesChange({
-              ...syncTemplates,
-              sessions: { endpointPath: e.target.value }
-            })}
-            placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/functions"
-            data-testid="input-sync-sessions-endpoint"
-            disabled={!syncSettingsEditable}
-            className={!syncSettingsEditable ? "bg-muted" : ""}
-          />
-          <p className="text-xs text-muted-foreground">
-            Path to fetch sessions/functions from the external platform
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="session-registrations-endpoint">4. Session Registrations Endpoint Path</Label>
-          <Input
-            id="session-registrations-endpoint"
-            value={syncTemplates.sessionRegistrations?.endpointPath || ""}
-            onChange={(e) => onSyncTemplatesChange({
-              ...syncTemplates,
-              sessionRegistrations: { endpointPath: e.target.value }
-            })}
-            placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/functionRegistrations"
-            data-testid="input-sync-session-registrations-endpoint"
-            disabled={!syncSettingsEditable}
-            className={!syncSettingsEditable ? "bg-muted" : ""}
-          />
-          <p className="text-xs text-muted-foreground">
-            Path to fetch session registrations (attendee-session associations)
-          </p>
-        </div>
-
-        <Separator />
-
-        <div className="space-y-4">
-          <h4 className="text-sm font-medium">Default Sync Intervals</h4>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="pre-event-interval">Before Event (minutes)</Label>
-              <Input
-                id="pre-event-interval"
-                type="number"
-                min={1}
-                value={defaultSyncSettings.preEventIntervalMinutes}
-                onChange={(e) => onDefaultSyncSettingsChange({
-                  ...defaultSyncSettings,
-                  preEventIntervalMinutes: parseInt(e.target.value) || 1440
-                })}
-                data-testid="input-pre-event-interval"
-                disabled={!syncSettingsEditable}
-                className={!syncSettingsEditable ? "bg-muted" : ""}
-              />
-              <p className="text-xs text-muted-foreground">
-                Sync interval before event starts (default: 1440 = daily)
-              </p>
+    <div className="space-y-4">
+      {/* What to Sync */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">What to Sync</CardTitle>
+          <CardDescription>
+            Choose which data types to synchronize from the external platform.
+            Sync runs in order: Events, Attendees, Sessions, Session Registrations.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+            <div className="flex items-center gap-3">
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <Label className="text-sm font-medium">Events</Label>
+                <p className="text-xs text-muted-foreground">Auto-discover events from the external platform</p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="during-event-interval">During Event (minutes)</Label>
-              <Input
-                id="during-event-interval"
-                type="number"
-                min={1}
-                value={defaultSyncSettings.duringEventIntervalMinutes}
-                onChange={(e) => onDefaultSyncSettingsChange({
-                  ...defaultSyncSettings,
-                  duringEventIntervalMinutes: parseInt(e.target.value) || 1
-                })}
-                data-testid="input-during-event-interval"
-                disabled={!syncSettingsEditable}
-                className={!syncSettingsEditable ? "bg-muted" : ""}
-              />
-              <p className="text-xs text-muted-foreground">
-                Sync interval during event (default: 1 = every minute)
-              </p>
-            </div>
+            <Switch
+              checked={eventsEnabled}
+              onCheckedChange={handleToggleEvents}
+              data-testid="switch-sync-events"
+            />
           </div>
-        </div>
-      </CardContent>
-    </Card>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+            <div className="flex items-center gap-3">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <Label className="text-sm font-medium">Attendees</Label>
+                <p className="text-xs text-muted-foreground">Sync registrations per event</p>
+              </div>
+            </div>
+            <Switch
+              checked={attendeesEnabled}
+              onCheckedChange={handleToggleAttendees}
+              data-testid="switch-sync-attendees"
+            />
+          </div>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+            <div className="flex items-center gap-3">
+              <Layers className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <Label className="text-sm font-medium">Sessions</Label>
+                <p className="text-xs text-muted-foreground">Sync sessions per event</p>
+              </div>
+            </div>
+            <Switch
+              checked={sessionsEnabled}
+              onCheckedChange={handleToggleSessions}
+              data-testid="switch-sync-sessions"
+            />
+          </div>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/20">
+            <div className="flex items-center gap-3">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <Label className="text-sm font-medium">Session Registrations</Label>
+                <p className="text-xs text-muted-foreground">Sync attendee-to-session assignments</p>
+              </div>
+            </div>
+            <Switch
+              checked={sessionRegsEnabled}
+              onCheckedChange={handleToggleSessionRegs}
+              data-testid="switch-sync-session-regs"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Sync Behavior */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Sync Behavior</CardTitle>
+          <CardDescription>
+            Control how frequently data is pulled from the external platform.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <RadioGroup
+            value={isAdaptive ? "adaptive" : "fixed"}
+            onValueChange={handleScheduleChange}
+          >
+            <div className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20">
+              <RadioGroupItem value="adaptive" id="schedule-adaptive" className="mt-0.5" />
+              <div>
+                <Label htmlFor="schedule-adaptive" className="text-sm font-medium cursor-pointer">
+                  Adaptive (recommended)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Syncs more frequently as events approach. Daily before event, every minute during.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 p-3 rounded-lg border bg-muted/20">
+              <RadioGroupItem value="fixed" id="schedule-fixed" className="mt-0.5" />
+              <div className="flex-1">
+                <Label htmlFor="schedule-fixed" className="text-sm font-medium cursor-pointer">
+                  Fixed interval
+                </Label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Use the same sync interval regardless of event timing.
+                </p>
+                {!isAdaptive && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">Before event (min)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={defaultSyncSettings.preEventIntervalMinutes}
+                        onChange={(e) => onDefaultSyncSettingsChange({
+                          ...defaultSyncSettings,
+                          preEventIntervalMinutes: parseInt(e.target.value) || 60
+                        })}
+                        data-testid="input-pre-event-interval"
+                        className="h-8"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">During event (min)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={defaultSyncSettings.duringEventIntervalMinutes}
+                        onChange={(e) => onDefaultSyncSettingsChange({
+                          ...defaultSyncSettings,
+                          duringEventIntervalMinutes: parseInt(e.target.value) || 5
+                        })}
+                        data-testid="input-during-event-interval"
+                        className="h-8"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </RadioGroup>
+
+          {accountCode && (
+            <div className="flex items-center gap-2 p-3 bg-muted/30 rounded-lg">
+              <Label className="text-xs text-muted-foreground">Account Code:</Label>
+              <Badge variant="secondary" className="font-mono text-xs">{accountCode}</Badge>
+              <span className="text-xs text-muted-foreground">(from integration config)</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Super Admin Advanced Settings */}
+      {isSuperAdmin && (
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <Card>
+            <CardHeader className="pb-0">
+              <CollapsibleTrigger className="flex items-center justify-between w-full group">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-muted-foreground" />
+                  <CardTitle className="text-base">Advanced Settings</CardTitle>
+                  <Badge variant="outline" className="text-xs">Super Admin</Badge>
+                </div>
+                {advancedOpen ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform" />
+                )}
+              </CollapsibleTrigger>
+            </CardHeader>
+            <CollapsibleContent>
+              <CardContent className="pt-4 space-y-4">
+                {/* Resolved Endpoints (read-only) */}
+                {providerSpec && (
+                  <div className="space-y-2">
+                    <Label className="text-sm font-medium">Resolved Endpoints (read-only)</Label>
+                    <div className="bg-muted/50 border rounded-lg p-4 font-mono text-xs space-y-3">
+                      {providerSpec.dataTypes.events && (
+                        <div>
+                          <span className="text-muted-foreground">Events:</span>
+                          <div className="mt-1">
+                            {providerSpec.dataTypes.events.endpoint.method}{" "}
+                            {resolveUrl(providerSpec.dataTypes.events.endpoint.path)}
+                          </div>
+                          {providerSpec.dataTypes.events.endpoint.incrementalFilter && (
+                            <div className="text-muted-foreground mt-0.5">
+                              Incremental: ?{providerSpec.dataTypes.events.endpoint.incrementalFilter.paramName}={"{timestamp}"}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {providerSpec.dataTypes.attendees && (
+                        <div>
+                          <span className="text-muted-foreground">Attendees:</span>
+                          <div className="mt-1">
+                            {providerSpec.dataTypes.attendees.endpoint.method}{" "}
+                            {resolveUrl(providerSpec.dataTypes.attendees.endpoint.path)}
+                          </div>
+                          {providerSpec.dataTypes.attendees.endpoint.incrementalFilter && (
+                            <div className="text-muted-foreground mt-0.5">
+                              Incremental: ?{providerSpec.dataTypes.attendees.endpoint.incrementalFilter.paramName}={"{timestamp}"}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {providerSpec.dataTypes.sessions && (
+                        <div>
+                          <span className="text-muted-foreground">Sessions:</span>
+                          <div className="mt-1">
+                            {providerSpec.dataTypes.sessions.endpoint.method}{" "}
+                            {resolveUrl(providerSpec.dataTypes.sessions.endpoint.path)}
+                          </div>
+                          {providerSpec.dataTypes.sessions.endpoint.incrementalFilter && (
+                            <div className="text-muted-foreground mt-0.5">
+                              Incremental: ?{providerSpec.dataTypes.sessions.endpoint.incrementalFilter.paramName}={"{timestamp}"}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Editable endpoint templates (super admin only) */}
+                <Separator />
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm font-medium">Endpoint Template Overrides</Label>
+                    <EditableSettingsLock
+                      editable={syncSettingsEditable}
+                      onEditableChange={onSyncSettingsEditableChange}
+                      canEdit={canEditSettings}
+                      labelId="sync-settings"
+                      warningText="Changes affect data synchronization."
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="event-list-endpoint-sync" className="text-xs text-muted-foreground">Events Endpoint</Label>
+                    <Input
+                      id="event-list-endpoint-sync"
+                      value={eventListEndpointPath}
+                      onChange={(e) => onEventListEndpointPathChange(e.target.value)}
+                      placeholder="/certainExternal/service/v1/Event/{{accountCode}}"
+                      data-testid="input-event-list-endpoint-sync"
+                      disabled={!syncSettingsEditable}
+                      className={`font-mono text-xs ${!syncSettingsEditable ? "bg-muted" : ""}`}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="attendees-endpoint" className="text-xs text-muted-foreground">Attendees Endpoint</Label>
+                    <Input
+                      id="attendees-endpoint"
+                      value={syncTemplates.attendees?.endpointPath || ""}
+                      onChange={(e) => onSyncTemplatesChange({
+                        ...syncTemplates,
+                        attendees: { endpointPath: e.target.value }
+                      })}
+                      placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/registrations"
+                      data-testid="input-sync-attendees-endpoint"
+                      disabled={!syncSettingsEditable}
+                      className={`font-mono text-xs ${!syncSettingsEditable ? "bg-muted" : ""}`}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="sessions-endpoint" className="text-xs text-muted-foreground">Sessions Endpoint</Label>
+                    <Input
+                      id="sessions-endpoint"
+                      value={syncTemplates.sessions?.endpointPath || ""}
+                      onChange={(e) => onSyncTemplatesChange({
+                        ...syncTemplates,
+                        sessions: { endpointPath: e.target.value }
+                      })}
+                      placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/functions"
+                      data-testid="input-sync-sessions-endpoint"
+                      disabled={!syncSettingsEditable}
+                      className={`font-mono text-xs ${!syncSettingsEditable ? "bg-muted" : ""}`}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="session-registrations-endpoint" className="text-xs text-muted-foreground">Session Registrations Endpoint</Label>
+                    <Input
+                      id="session-registrations-endpoint"
+                      value={syncTemplates.sessionRegistrations?.endpointPath || ""}
+                      onChange={(e) => onSyncTemplatesChange({
+                        ...syncTemplates,
+                        sessionRegistrations: { endpointPath: e.target.value }
+                      })}
+                      placeholder="/accounts/{{accountCode}}/events/{{eventCode}}/functionRegistrations"
+                      data-testid="input-sync-session-registrations-endpoint"
+                      disabled={!syncSettingsEditable}
+                      className={`font-mono text-xs ${!syncSettingsEditable ? "bg-muted" : ""}`}
+                    />
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Use {"{{accountCode}}"}, {"{{eventCode}}"}, {"{{lastSyncTimestamp}}"} as template variables.
+                  </p>
+                </div>
+              </CardContent>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
+      )}
+    </div>
   );
 }
 
@@ -933,20 +1218,12 @@ function RealtimeTab({
           warningText="Editing enabled. Changes may affect realtime check-in sync."
         />
 
-        <div className="flex items-center space-x-2">
-          <Switch
-            id="realtime-sync-enabled"
-            checked={realtimeSyncConfig.enabled}
-            onCheckedChange={(checked) => onRealtimeSyncConfigChange({
-              ...realtimeSyncConfig,
-              enabled: checked
-            })}
-            disabled={!syncSettingsEditable}
-          />
-          <Label htmlFor="realtime-sync-enabled">Enable realtime sync</Label>
+        <div className="flex items-center space-x-2 bg-green-50 dark:bg-green-900/20 p-2 rounded-md">
+          <Badge variant="outline" className="text-green-600 border-green-300">Enabled</Badge>
+          <Label className="text-sm text-muted-foreground">Realtime sync is always active. Disable per event in Event Settings.</Label>
         </div>
 
-        {realtimeSyncConfig.enabled && (
+        {(
           <>
             <div className="space-y-2">
               <Label htmlFor="realtime-endpoint-url">Registration Endpoint URL</Label>

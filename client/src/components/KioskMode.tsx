@@ -42,6 +42,7 @@ import {
 import { printOrchestrator } from "@/services/print-orchestrator";
 import { offlineCheckinService } from "@/services/offline-checkin-service";
 import { kioskPreCacheService, PreCacheProgress } from "@/services/kiosk-precache-service";
+import { offlineDB } from "@/lib/offline-db";
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -65,8 +66,10 @@ import { Progress } from "@/components/ui/progress";
 import QRScanner from "@/components/QRScanner";
 import { parseQrCode } from "@/lib/qr-parser";
 import BadgeAIChat from "@/components/BadgeAIChat";
+import { WorkflowRunnerComponent } from "@/components/workflow/WorkflowRunner";
+import type { EventWorkflowWithSteps } from "@shared/schema";
 
-type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "group" | "success" | "printing" | "error";
+type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "group" | "workflow" | "success" | "printing" | "error";
 
 interface TemplateMappingEntry {
   templateId: string | null;
@@ -121,6 +124,9 @@ export default function KioskMode({
   const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
   const [groupCheckedInMembers, setGroupCheckedInMembers] = useState<GroupMember[]>([]);
   const [groupPrintIndex, setGroupPrintIndex] = useState(0);
+  const [workflowAttendee, setWorkflowAttendee] = useState<Attendee | null>(null);
+  const [kioskWorkflow, setKioskWorkflow] = useState<EventWorkflowWithSteps | null>(null);
+  const [workflowLoaded, setWorkflowLoaded] = useState(false);
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const networkPrint = useNetworkPrint();
@@ -133,6 +139,22 @@ export default function KioskMode({
     mode: 'kiosk',
     pin: exitPin,
   });
+
+  // Fetch workflow config for kiosk on mount
+  useEffect(() => {
+    if (!eventId || !exitPin || workflowLoaded) return;
+    fetch(`/api/kiosk/${eventId}/workflow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: exitPin }),
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setKioskWorkflow(data);
+        setWorkflowLoaded(true);
+      })
+      .catch(() => setWorkflowLoaded(true));
+  }, [eventId, exitPin, workflowLoaded]);
 
   useEffect(() => {
     const kioskTheme = branding?.kioskTheme || kioskSettings?.kioskTheme;
@@ -221,16 +243,48 @@ export default function KioskMode({
     : {
         queryKey: [`/api/kiosk/${eventId}/launch-info`],
         queryFn: async () => {
-          const res = await fetch(`/api/kiosk/${eventId}/launch-info`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          if (data.branding) {
-            setBranding(data.branding as KioskBrandingConfig);
+          try {
+            const res = await fetch(`/api/kiosk/${eventId}/launch-info`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (data.branding) {
+              setBranding(data.branding as KioskBrandingConfig);
+            }
+            if (data.badgeSettings) {
+              setEventBadgeSettings(data.badgeSettings);
+            }
+            return data.event as Event;
+          } catch (err) {
+            // Offline fallback: try loading from IndexedDB cache
+            if (!navigator.onLine && eventId) {
+              console.warn('[KioskMode] launch-info fetch failed, attempting offline fallback');
+              const cachedEvent = await offlineDB.getEvent(eventId);
+              if (cachedEvent) {
+                // Load cached branding
+                const cachedBranding = await offlineDB.getAppState(`branding_${eventId}`);
+                if (cachedBranding) {
+                  setBranding(cachedBranding as KioskBrandingConfig);
+                }
+                // Load cached badge templates as fallback badge settings
+                const customerId = cachedEvent.customerId || scopedCustomerId;
+                if (customerId) {
+                  const cachedTemplates = await offlineDB.getBadgeTemplates(customerId);
+                  if (cachedTemplates.length > 0) {
+                    // Templates will be loaded by the templates query fallback
+                  }
+                }
+                return {
+                  id: cachedEvent.id,
+                  name: cachedEvent.name,
+                  eventDate: cachedEvent.date,
+                  customerId: cachedEvent.customerId,
+                  status: 'active',
+                  defaultBadgeTemplateId: cachedEvent.defaultBadgeTemplateId || null,
+                } as unknown as Event;
+              }
+            }
+            throw err;
           }
-          if (data.badgeSettings) {
-            setEventBadgeSettings(data.badgeSettings);
-          }
-          return data.event as Event;
         },
         enabled: Boolean(eventId),
       };
@@ -319,9 +373,22 @@ export default function KioskMode({
     : {
         queryKey: [`/api/kiosk/${eventId}/badge-templates`],
         queryFn: async () => {
-          const res = await fetch(`/api/kiosk/${eventId}/badge-templates`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
+          try {
+            const res = await fetch(`/api/kiosk/${eventId}/badge-templates`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          } catch (err) {
+            // Offline fallback: load cached templates from IndexedDB
+            if (!navigator.onLine) {
+              const customerId = event?.customerId || scopedCustomerId;
+              if (customerId) {
+                console.warn('[KioskMode] badge-templates fetch failed, loading from cache');
+                const cached = await offlineDB.getBadgeTemplates(customerId);
+                if (cached.length > 0) return cached;
+              }
+            }
+            throw err;
+          }
         },
         enabled: Boolean(eventId && isEventValid),
       };
@@ -336,9 +403,18 @@ export default function KioskMode({
     : {
         queryKey: [`/api/kiosk/${eventId}/template-mappings`],
         queryFn: async () => {
-          const res = await fetch(`/api/kiosk/${eventId}/template-mappings`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
+          try {
+            const res = await fetch(`/api/kiosk/${eventId}/template-mappings`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json();
+          } catch (err) {
+            // Offline fallback: return empty mappings (templates will match by participant type from cache)
+            if (!navigator.onLine) {
+              console.warn('[KioskMode] template-mappings fetch failed offline, using empty mappings');
+              return {};
+            }
+            throw err;
+          }
         },
       };
 
@@ -353,7 +429,7 @@ export default function KioskMode({
     if (!eventLoading && eventError) {
       const errMsg = eventError instanceof Error ? eventError.message : String(eventError);
       console.error("[KioskMode] Event load failed:", errMsg, eventError);
-      const isAccessDenied = errMsg.toLowerCase().includes('access denied') || 
+      const isAccessDenied = errMsg.toLowerCase().includes('access denied') ||
                              errMsg.toLowerCase().includes('forbidden') ||
                              errMsg.toLowerCase().includes('403');
       const isAuthError = errMsg.toLowerCase().includes('authentication') ||
@@ -363,6 +439,8 @@ export default function KioskMode({
         setSecurityError("Access denied: This event does not belong to your organization.");
       } else if (isAuthError) {
         setSecurityError("Your session has expired. Please exit and log in again.");
+      } else if (!navigator.onLine) {
+        setSecurityError("No cached data available. Connect to the internet and sync data first.");
       } else {
         setSecurityError("Could not load event data. Please check your connection and try again.");
       }
@@ -405,6 +483,12 @@ export default function KioskMode({
           throw new Error(errData.error || 'Check-in failed');
         }
         const data = await res.json();
+        if (data.requiresWorkflow && data.attendee) {
+          setWorkflowAttendee(data.attendee as Attendee);
+          setLastScanned(data.attendee as Attendee);
+          setStep("workflow");
+          return { success: true, isOffline: false, requiresWorkflow: true };
+        }
         if (data.attendee) {
           setLastScanned(data.attendee as Attendee);
           trackComplete("kiosk", "scan");
@@ -419,6 +503,7 @@ export default function KioskMode({
       return result;
     },
     onSuccess: (result, attendeeId) => {
+      if ((result as any)?.requiresWorkflow) return; // Workflow step handles the rest
       const attendee = effectiveAttendees.find(a => a.id === attendeeId);
       if (attendee) {
         setLastScanned({ ...attendee, checkedIn: true } as Attendee);
@@ -463,6 +548,7 @@ export default function KioskMode({
     setGroupScannedMemberId(null);
     setGroupCheckedInMembers([]);
     setGroupPrintIndex(0);
+    setWorkflowAttendee(null);
   }, [groupCheckin]);
 
   // Kiosk idle timeout disabled through beta - re-enable by removing the `false &&` below
@@ -583,6 +669,34 @@ export default function KioskMode({
       setEnteredPin("");
     }
   };
+
+  const handleWorkflowComplete = useCallback(async () => {
+    if (!workflowAttendee || !exitPin || !eventId) return;
+    // Finalize the check-in now that workflow is done
+    try {
+      const res = await fetch(`/api/kiosk/${eventId}/checkin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: exitPin, attendeeId: workflowAttendee.id, skipWorkflow: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.attendee) {
+          setLastScanned(data.attendee as Attendee);
+        }
+      }
+    } catch {
+      // Check-in already succeeded conceptually
+    }
+    trackComplete("kiosk", "scan");
+    setWorkflowAttendee(null);
+    setStep("success");
+  }, [workflowAttendee, exitPin, eventId, trackComplete]);
+
+  const handleWorkflowCancel = useCallback(() => {
+    setWorkflowAttendee(null);
+    setStep("scanning");
+  }, []);
 
   const handleStartCheckIn = () => {
     trackStart("kiosk", "scan");
@@ -750,7 +864,78 @@ export default function KioskMode({
         setStep("success");
       }
     } catch {
-      setWalkinError("Registration failed. Please try again.");
+      // Offline fallback: save walk-in locally when API is unreachable
+      if (!navigator.onLine) {
+        try {
+          const tempId = `walkin-temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const now = new Date();
+          const offlineWalkin: OfflineAttendee = {
+            id: tempId,
+            eventId,
+            firstName: walkinForm.firstName?.trim() || '',
+            lastName: walkinForm.lastName?.trim() || '',
+            email: walkinForm.email?.trim() || '',
+            company: walkinForm.company?.trim(),
+            title: walkinForm.title?.trim(),
+            participantType: walkinForm.participantType || 'Walk-in',
+            checkedIn: true,
+            checkedInAt: now.toISOString(),
+            badgePrinted: false,
+            qrCode: tempId,
+            customFields: {},
+            syncStatus: 'pending',
+            lastModified: now.toISOString(),
+          };
+
+          await offlineDB.saveAttendee(offlineWalkin);
+
+          await offlineDB.addToSyncQueue({
+            action: 'walkin',
+            entity: 'attendee',
+            entityId: tempId,
+            data: {
+              eventId,
+              pin: exitPin,
+              formData: { ...walkinForm },
+              tempId,
+              createdAt: now.toISOString(),
+            },
+            timestamp: now.toISOString(),
+            retryCount: 0,
+          });
+
+          // Add to local state so the walk-in appears in kiosk search immediately
+          setOfflineAttendees(prev => [...prev, offlineWalkin]);
+
+          toast({
+            title: "Walk-in Registered (Offline)",
+            description: "Walk-in registered offline. Will sync when online.",
+          });
+
+          updateSyncStatus();
+
+          // Show success as if online
+          setLastScanned({
+            id: tempId,
+            firstName: offlineWalkin.firstName,
+            lastName: offlineWalkin.lastName,
+            email: offlineWalkin.email || null,
+            company: offlineWalkin.company || null,
+            title: offlineWalkin.title || null,
+            participantType: offlineWalkin.participantType,
+            checkedIn: true,
+            customFields: {},
+            externalId: null,
+          } as Attendee);
+          trackComplete("kiosk", "scan");
+          setStep("success");
+        } catch (offlineErr) {
+          console.error('[KioskMode] Offline walk-in save failed:', offlineErr);
+          setWalkinError("Failed to save walk-in registration offline. Please try again.");
+        }
+      } else {
+        setWalkinError("Registration failed. Please try again.");
+      }
     } finally {
       setWalkinSubmitting(false);
     }
@@ -782,7 +967,7 @@ export default function KioskMode({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: exitPin, orderCode: scannedValue }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) throw new Error(`Group lookup failed (${res.status})`);
 
       const data = await res.json();
       if (!data.found || !data.members || data.members.length <= 1) {
@@ -800,10 +985,27 @@ export default function KioskMode({
       setStep("group");
       return true;
     } catch {
+      // Offline fallback: search cached attendees by orderCode
+      if (!navigator.onLine && offlineAttendees.length > 0) {
+        const found = groupCheckin.offlineLookup(scannedValue, offlineAttendees);
+        if (found) {
+          // Determine scanned member from source data (hook state hasn't re-rendered yet)
+          const scannedMember = offlineAttendees.find(
+            a => (a as any).orderCode === scannedValue || (a as any).externalId === scannedValue
+          );
+          setGroupScannedMemberId(scannedMember?.id || null);
+          toast({
+            title: "Group Found (Offline)",
+            description: "Using cached data. Will sync when online.",
+          });
+          setStep("group");
+          return true;
+        }
+      }
       groupCheckin.reset();
       return false;
     }
-  }, [isGroupCheckinEnabled, exitPin, eventId, groupCheckin]);
+  }, [isGroupCheckinEnabled, exitPin, eventId, groupCheckin, offlineAttendees, toast]);
 
   const handleQRScan = async (code: string) => {
     const trimmed = code.trim();
@@ -1595,6 +1797,33 @@ export default function KioskMode({
                     <Button variant="outline" onClick={handleGroupBack} data-testid="button-group-back">
                       <ArrowLeft className="h-4 w-4 mr-2" />
                       Back to Scan
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {step === "workflow" && workflowAttendee && kioskWorkflow && (
+                <div className="space-y-4">
+                  <div className="text-center mb-4">
+                    <h2 className="text-2xl font-semibold">
+                      {workflowAttendee.firstName} {workflowAttendee.lastName}
+                    </h2>
+                    <p className="text-muted-foreground">Please complete the following steps</p>
+                  </div>
+                  <WorkflowRunnerComponent
+                    eventId={eventId!}
+                    attendeeId={workflowAttendee.id}
+                    attendee={workflowAttendee}
+                    mode="kiosk"
+                    kioskPin={exitPin}
+                    initialWorkflow={kioskWorkflow}
+                    onComplete={handleWorkflowComplete}
+                    showSkipButton={false}
+                  />
+                  <div className="text-center pt-2">
+                    <Button variant="outline" onClick={handleWorkflowCancel}>
+                      <ArrowLeft className="h-4 w-4 mr-2" />
+                      Cancel
                     </Button>
                   </div>
                 </div>

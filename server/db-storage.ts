@@ -337,6 +337,10 @@ export class DbStorage implements IStorage {
     return db.select().from(schema.events).where(eq(schema.events.customerId, customerId)).orderBy(desc(schema.events.eventDate));
   }
 
+  async getEventsByIntegrationId(integrationId: string): Promise<Event[]> {
+    return db.select().from(schema.events).where(eq(schema.events.integrationId, integrationId));
+  }
+
   async getEvent(id: string): Promise<Event | undefined> {
     const [event] = await db.select().from(schema.events).where(eq(schema.events.id, id)).limit(1);
     return event;
@@ -493,6 +497,11 @@ export class DbStorage implements IStorage {
 
   async getCustomerIntegrations(customerId: string): Promise<CustomerIntegration[]> {
     return db.select().from(schema.customerIntegrations).where(eq(schema.customerIntegrations.customerId, customerId));
+  }
+
+  async getAllCustomerIntegrationIds(): Promise<string[]> {
+    const rows = await db.select({ id: schema.customerIntegrations.id }).from(schema.customerIntegrations);
+    return rows.map(r => r.id);
   }
 
   async getCustomerIntegration(id: string): Promise<CustomerIntegration | undefined> {
@@ -1098,6 +1107,18 @@ export class DbStorage implements IStorage {
       and(
         eq(schema.syncJobs.status, "pending"),
         eq(schema.syncJobs.endpointConfigId, configId)
+      )
+    );
+  }
+
+  async getActiveJobsByEventSyncState(eventSyncStateId: string): Promise<SyncJob[]> {
+    return db.select().from(schema.syncJobs).where(
+      and(
+        or(
+          eq(schema.syncJobs.status, "pending"),
+          eq(schema.syncJobs.status, "running")
+        ),
+        eq(schema.syncJobs.eventSyncStateId, eventSyncStateId)
       )
     );
   }

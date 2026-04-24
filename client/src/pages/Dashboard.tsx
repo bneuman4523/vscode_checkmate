@@ -54,18 +54,20 @@ export default function Dashboard() {
   const { user } = useAuth();
   const [, setLocation] = useLocation();
 
+  const isMultiAccount = user?.role === "super_admin" || user?.role === "partner";
+
   const { data: platformStats, isLoading } = useQuery<PlatformStats>({
     queryKey: ["/api/platform-stats"],
     enabled: user?.role === "super_admin",
   });
 
   useEffect(() => {
-    if (user && user.role !== "super_admin" && user.customerId) {
+    if (user && !isMultiAccount && user.customerId) {
       setLocation(`/customers/${user.customerId}`);
     }
-  }, [user, setLocation]);
+  }, [user, isMultiAccount, setLocation]);
 
-  if (user && user.role !== "super_admin" && user.customerId) {
+  if (user && !isMultiAccount && user.customerId) {
     return null;
   }
 

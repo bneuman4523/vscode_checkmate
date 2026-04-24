@@ -438,7 +438,10 @@ export default function DataSyncPage({ eventId }: DataSyncPageProps) {
 
       {hasSyncStates && (
         <div className="grid gap-4 md:grid-cols-3">
-          {syncStates.map((state) => {
+          {[...syncStates].sort((a, b) => {
+            const order: Record<string, number> = { attendees: 1, sessions: 2, session_registrations: 3 };
+            return (order[a.dataType] || 99) - (order[b.dataType] || 99);
+          }).map((state) => {
             const config = DATA_TYPE_CONFIG[state.dataType as keyof typeof DATA_TYPE_CONFIG];
             if (!config) return null;
             const Icon = config.icon;

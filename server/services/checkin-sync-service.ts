@@ -145,6 +145,7 @@ class CheckinSyncService {
     }
 
     const config = integration.realtimeSyncConfig as RealtimeSyncConfig;
+    const eventSyncSettings = event.syncSettings as any;
 
     if (!attendee.externalId && config.walkinEndpointUrl) {
       logger.info(`Attendee ${attendee.id} has no externalId — routing to walk-in registration sync`);
@@ -159,7 +160,9 @@ class CheckinSyncService {
       ? new Date((attendee as any).badgePrintedAt).toISOString().replace('Z', '').split('.')[0]
       : checkinDate;
 
-    const payload = this.buildCertainPayload(config.checkinStatus || "Checked In", {
+    // Event override → integration config → default
+    const checkinStatus = eventSyncSettings?.checkinStatus || config.checkinStatus || "Checked In";
+    const payload = this.buildCertainPayload(checkinStatus, {
       checkInDate: checkinDate,
       badgePrintedDate: badgePrintedDate,
       entryType: "On-site",
@@ -193,7 +196,10 @@ class CheckinSyncService {
     const checkinDate = attendee.checkedInAt
       ? new Date(attendee.checkedInAt).toISOString().replace('Z', '').split('.')[0]
       : now;
-    const source = config.walkinSource || "Greet";
+    const eventSyncSettings = event.syncSettings as any;
+    // Event override → integration config → default
+    const walkinSource = eventSyncSettings?.walkinSource || config.walkinSource || "Greet";
+    const walkinStatus = eventSyncSettings?.walkinStatus || config.walkinStatus || config.checkinStatus || "Checked In";
 
     const payload: CertainRegistrationPayload = {
       profile: {
@@ -204,8 +210,8 @@ class CheckinSyncService {
         organization: attendee.company || undefined,
         position: attendee.title || undefined,
       },
-      registrationStatusLabel: config.walkinStatus || config.checkinStatus || "Checked In",
-      source,
+      registrationStatusLabel: walkinStatus,
+      source: walkinSource,
     };
 
     if (attendee.checkedIn && attendee.checkedInAt) {
@@ -263,7 +269,10 @@ class CheckinSyncService {
     }
 
     const config = integration.realtimeSyncConfig as RealtimeSyncConfig;
-    const payload = this.buildCertainPayload(config.revertStatus || "Registered");
+    const eventSyncSettings = event.syncSettings as any;
+    // Event override → integration config → default
+    const revertStatus = eventSyncSettings?.revertStatus || config.revertStatus || "Registered";
+    const payload = this.buildCertainPayload(revertStatus);
     return this.sendWithRetry(payload, integration, config, attendee, event);
   }
 

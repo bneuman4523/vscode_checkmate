@@ -125,19 +125,19 @@ export type InsertLocation = z.infer<typeof insertLocationSchema>;
 export type Location = typeof locations.$inferSelect;
 
 // User roles hierarchy
-export const userRoles = ['super_admin', 'admin', 'manager', 'staff'] as const;
+export const userRoles = ['super_admin', 'partner', 'admin', 'manager', 'staff'] as const;
 export type UserRole = typeof userRoles[number];
 
-// Users (scoped to customer accounts, except super_admin which is global)
+// Users (scoped to customer accounts, except super_admin/partner which are multi-account)
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
-  customerId: text("customer_id").references(() => customers.id, { onDelete: "cascade" }), // NULL for super_admin
+  customerId: text("customer_id").references(() => customers.id, { onDelete: "cascade" }), // NULL for super_admin and partner
   email: text("email").notNull().unique(),
   phoneNumber: text("phone_number").unique(), // E.164 format (e.g., +15551234567) - must be unique to prevent access conflicts
   passwordHash: text("password_hash"), // For email/password login (optional - NULL means Replit Auth only)
   firstName: text("first_name"),
   lastName: text("last_name"),
-  role: text("role").notNull().default("staff").$type<UserRole>(), // super_admin, admin, manager, staff
+  role: text("role").notNull().default("staff").$type<UserRole>(), // super_admin, partner, admin, manager, staff
   isActive: boolean("is_active").notNull().default(true),
   lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -403,9 +403,21 @@ export const events = pgTable("events", {
     realtimeSyncEnabled?: boolean | null;
     syncFrozen?: boolean;
     syncFrozenAt?: string;
-    syncIntervalMinutes?: number | null;
+    syncIntervalMinutes?: number | null; // Deprecated — replaced by adaptive scheduling
     selectedStatuses?: string[];
     statusesConfigured?: boolean;
+    // Tiered sync settings
+    adaptiveScheduleEnabled?: boolean; // Default true. When false, uses fixedIntervalMinutes.
+    fixedIntervalMinutes?: number | null; // Only used when adaptiveScheduleEnabled is false.
+    attendeeSyncEnabled?: boolean; // Default true
+    sessionSyncEnabled?: boolean; // Default true
+    sessionRegistrationSyncEnabled?: boolean; // Default true
+    postEventGracePeriodHours?: number; // Hours after event end to continue syncing (default 2)
+    // Real-time sync status overrides (per-event, overrides integration defaults)
+    checkinStatus?: string; // Status sent when checked in (default from integration: "Attended")
+    revertStatus?: string; // Status sent on revert (default from integration: "Registered")
+    walkinStatus?: string; // Status for walk-in registrations (default from integration: "Checked In")
+    walkinSource?: string; // Source label for walk-ins (default from integration: "Greet")
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),
@@ -819,6 +831,10 @@ export const eventSyncStates = pgTable("event_sync_states", {
   // Schedule settings (overrides integration defaults)
   syncEnabled: boolean("sync_enabled").notNull().default(true),
   syncIntervalMinutes: integer("sync_interval_minutes"),
+  // Tiered sync support
+  syncTier: text("sync_tier").notNull().default("event_data"), // 'account_discovery', 'event_data', 'event_dependent'
+  adaptiveScheduleEnabled: boolean("adaptive_schedule_enabled").notNull().default(true),
+  lastSyncDurationMs: integer("last_sync_duration_ms"),
   // Audit
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -827,6 +843,7 @@ export const eventSyncStates = pgTable("event_sync_states", {
   integrationIdx: index("event_sync_states_integration_idx").on(table.integrationId),
   dataTypeIdx: index("event_sync_states_data_type_idx").on(table.dataType),
   eventDataTypeIdx: index("event_sync_states_event_data_type_idx").on(table.eventId, table.dataType),
+  dueForSyncIdx: index("event_sync_states_due_sync_idx").on(table.syncEnabled, table.nextSyncAt),
 }));
 
 export const insertEventSyncStateSchema = createInsertSchema(eventSyncStates).omit({
@@ -990,7 +1007,9 @@ export const syncJobs = pgTable("sync_jobs", {
   eventCodeMappingId: text("event_code_mapping_id").references(() => eventCodeMappings.id, { onDelete: "cascade" }),
   endpointConfigId: text("endpoint_config_id").references(() => integrationEndpointConfigs.id, { onDelete: "cascade" }),
   eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }), // Optional: specific event sync
-  jobType: text("job_type").notNull(), // attendee_sync, webhook, manual_refresh, scheduled
+  eventSyncStateId: text("event_sync_state_id").references(() => eventSyncStates.id, { onDelete: "cascade" }),
+  jobType: text("job_type").notNull(), // event_discovery, event_attendee_sync, event_session_sync, event_session_registration_sync, attendee_sync (legacy)
+  syncTier: text("sync_tier"), // 'account_discovery', 'event_data', 'event_dependent'
   triggerType: text("trigger_type").notNull().default("manual"), // scheduled, manual, on_demand, webhook
   priority: integer("priority").notNull().default(5), // 1-10, lower = higher priority
   // Execution metadata
@@ -2130,3 +2149,23 @@ export const insertDataRetentionLogSchema = createInsertSchema(dataRetentionLog)
 });
 export type InsertDataRetentionLog = z.infer<typeof insertDataRetentionLogSchema>;
 export type DataRetentionLog = typeof dataRetentionLog.$inferSelect;
+
+// Partner-to-customer assignments (partners can access multiple accounts)
+export const partnerCustomerAssignments = pgTable("partner_customer_assignments", {
+  id: text("id").primaryKey().$defaultFn(() => `pca-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+  assignedBy: text("assigned_by").references(() => users.id), // super_admin who made the assignment
+}, (table) => ({
+  userIdx: index("pca_user_idx").on(table.userId),
+  customerIdx: index("pca_customer_idx").on(table.customerId),
+  uniqueAssignment: index("pca_unique_idx").on(table.userId, table.customerId),
+}));
+
+export const insertPartnerCustomerAssignmentSchema = createInsertSchema(partnerCustomerAssignments).omit({
+  id: true,
+  assignedAt: true,
+});
+export type InsertPartnerCustomerAssignment = z.infer<typeof insertPartnerCustomerAssignmentSchema>;
+export type PartnerCustomerAssignment = typeof partnerCustomerAssignments.$inferSelect;
