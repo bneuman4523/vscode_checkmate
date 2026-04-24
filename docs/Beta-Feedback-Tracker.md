@@ -164,8 +164,12 @@ Known issues that still need fixing.
 
 | # | Area | Issue | Severity | Notes |
 |---|------|-------|----------|-------|
-| 6/A3/A4 | QR Scan | iPhone 15 rear camera doesn't scan QR codes (admin + staff) | 🔴 Blocker | Works on Mac/desktop; fails on iPhone 15 rear camera. Needs device-specific debugging |
 | C2 | QR Scan | Admin QR check-in via scanner not working on iPad (possibly attendee type related) | 🟠 Major | Needs re-test after QR parser updates |
+
+### Resolved (moved from Open Bugs)
+| # | Area | Resolution | Date |
+|---|------|-----------|------|
+| 6/A3/A4 | QR Scan | Fixed — increased QR code size to min 1" + quiet zone for iPhone 15 rear camera (commit 3e6b08a) | 2026-04-24 |
 
 ---
 

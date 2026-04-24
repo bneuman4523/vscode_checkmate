@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
@@ -12,41 +12,53 @@ import { useIsTablet } from "@/hooks/use-tablet";
 import ModeToggle from "@/components/ModeToggle";
 import { FeedbackWidget } from "@/components/FeedbackWidget";
 import { AssistantDrawerWrapper } from "@/components/AssistantDrawerWrapper";
+
+// Static imports — auth-critical pages that must load immediately
 import NotFound from "@/pages/not-found";
-import Dashboard from "@/pages/Dashboard";
-import Scanner from "@/pages/Scanner";
-import Badges from "@/pages/Badges";
-import Users from "@/pages/Users";
-import Kiosk from "@/pages/Kiosk";
-import Customers from "@/pages/Customers";
-import Templates from "@/pages/Templates";
-import PrinterSettings from "@/pages/PrinterSettings";
-import Locations from "@/pages/Locations";
-import CustomerDashboard from "@/pages/CustomerDashboard";
-import CustomerIntegrations from "@/pages/CustomerIntegrations";
-import CustomerFonts from "@/pages/CustomerFonts";
-import EventDashboard from "@/pages/EventDashboard";
-import EventReports from "@/pages/EventReports";
-import StaffLogin from "@/pages/StaffLogin";
-import StaffDashboard from "@/pages/StaffDashboard";
 import Login from "@/pages/Login";
 import SetPassword from "@/pages/SetPassword";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
-import SystemSettings from "@/pages/SystemSettings";
-import ConfigurationTemplates from "@/pages/ConfigurationTemplates";
-import ErrorReport from "@/pages/ErrorReport";
-import AuditLog from "@/pages/AuditLog";
-import FeedbackDashboard from "@/pages/FeedbackDashboard";
-import MissionControl from "@/pages/MissionControl";
-import MyFeedback from "@/pages/MyFeedback";
-import EventSetupGuide from "@/pages/EventSetupGuide";
-import AccountSetupGuide from "@/pages/AccountSetupGuide";
-import LicenseManagement from "@/pages/LicenseManagement";
-import DataRetention from "@/pages/DataRetention";
-import AccountBranding from "@/pages/AccountBranding";
-import SyncInsights from "@/pages/SyncInsights";
-import PrinterDiagnostics from "@/pages/PrinterDiagnostics";
+import StaffLogin from "@/pages/StaffLogin";
+import Kiosk from "@/pages/Kiosk";
+
+// Lazy-loaded pages — split into separate chunks, loaded on demand
+const Dashboard = React.lazy(() => import("@/pages/Dashboard"));
+const Scanner = React.lazy(() => import("@/pages/Scanner"));
+const Badges = React.lazy(() => import("@/pages/Badges"));
+const Users = React.lazy(() => import("@/pages/Users"));
+const Customers = React.lazy(() => import("@/pages/Customers"));
+const Templates = React.lazy(() => import("@/pages/Templates"));
+const PrinterSettings = React.lazy(() => import("@/pages/PrinterSettings"));
+const Locations = React.lazy(() => import("@/pages/Locations"));
+const CustomerDashboard = React.lazy(() => import("@/pages/CustomerDashboard"));
+const CustomerIntegrations = React.lazy(() => import("@/pages/CustomerIntegrations"));
+const CustomerFonts = React.lazy(() => import("@/pages/CustomerFonts"));
+const EventDashboard = React.lazy(() => import("@/pages/EventDashboard"));
+const EventReports = React.lazy(() => import("@/pages/EventReports"));
+const StaffDashboard = React.lazy(() => import("@/pages/StaffDashboard"));
+const SystemSettings = React.lazy(() => import("@/pages/SystemSettings"));
+const ConfigurationTemplates = React.lazy(() => import("@/pages/ConfigurationTemplates"));
+const ErrorReport = React.lazy(() => import("@/pages/ErrorReport"));
+const AuditLog = React.lazy(() => import("@/pages/AuditLog"));
+const FeedbackDashboard = React.lazy(() => import("@/pages/FeedbackDashboard"));
+const MissionControl = React.lazy(() => import("@/pages/MissionControl"));
+const MyFeedback = React.lazy(() => import("@/pages/MyFeedback"));
+const EventSetupGuide = React.lazy(() => import("@/pages/EventSetupGuide"));
+const AccountSetupGuide = React.lazy(() => import("@/pages/AccountSetupGuide"));
+const LicenseManagement = React.lazy(() => import("@/pages/LicenseManagement"));
+const DataRetention = React.lazy(() => import("@/pages/DataRetention"));
+const AccountBranding = React.lazy(() => import("@/pages/AccountBranding"));
+const SyncInsights = React.lazy(() => import("@/pages/SyncInsights"));
+const PrinterDiagnostics = React.lazy(() => import("@/pages/PrinterDiagnostics"));
+
+function LoadingFallback() {
+  return (
+    <div className="flex h-screen w-full items-center justify-center">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+    </div>
+  );
+}
 import { Button } from "@/components/ui/button";
 import { Building2, LogIn, LogOut, User, Menu, MoreVertical } from "lucide-react";
 import { useLocation } from "wouter";
@@ -69,6 +81,7 @@ import {
 
 function Router() {
   return (
+    <Suspense fallback={<LoadingFallback />}>
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/scanner" component={Scanner} />
@@ -111,6 +124,7 @@ function Router() {
       <Route path="/docs/account-setup" component={AccountSetupGuide} />
       <Route component={NotFound} />
     </Switch>
+    </Suspense>
   );
 }
 
