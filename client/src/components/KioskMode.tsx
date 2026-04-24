@@ -66,8 +66,10 @@ import { Progress } from "@/components/ui/progress";
 import QRScanner from "@/components/QRScanner";
 import { parseQrCode } from "@/lib/qr-parser";
 import BadgeAIChat from "@/components/BadgeAIChat";
+import { WorkflowRunnerComponent } from "@/components/workflow/WorkflowRunner";
+import type { EventWorkflowWithSteps } from "@shared/schema";
 
-type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "group" | "success" | "printing" | "error";
+type KioskStep = "welcome" | "scanning" | "results" | "verify" | "walkin" | "group" | "workflow" | "success" | "printing" | "error";
 
 interface TemplateMappingEntry {
   templateId: string | null;
@@ -122,6 +124,9 @@ export default function KioskMode({
   const [groupScannedMemberId, setGroupScannedMemberId] = useState<string | null>(null);
   const [groupCheckedInMembers, setGroupCheckedInMembers] = useState<GroupMember[]>([]);
   const [groupPrintIndex, setGroupPrintIndex] = useState(0);
+  const [workflowAttendee, setWorkflowAttendee] = useState<Attendee | null>(null);
+  const [kioskWorkflow, setKioskWorkflow] = useState<EventWorkflowWithSteps | null>(null);
+  const [workflowLoaded, setWorkflowLoaded] = useState(false);
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { toast } = useToast();
   const networkPrint = useNetworkPrint();
@@ -134,6 +139,22 @@ export default function KioskMode({
     mode: 'kiosk',
     pin: exitPin,
   });
+
+  // Fetch workflow config for kiosk on mount
+  useEffect(() => {
+    if (!eventId || !exitPin || workflowLoaded) return;
+    fetch(`/api/kiosk/${eventId}/workflow`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: exitPin }),
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        setKioskWorkflow(data);
+        setWorkflowLoaded(true);
+      })
+      .catch(() => setWorkflowLoaded(true));
+  }, [eventId, exitPin, workflowLoaded]);
 
   useEffect(() => {
     const kioskTheme = branding?.kioskTheme || kioskSettings?.kioskTheme;
@@ -462,6 +483,12 @@ export default function KioskMode({
           throw new Error(errData.error || 'Check-in failed');
         }
         const data = await res.json();
+        if (data.requiresWorkflow && data.attendee) {
+          setWorkflowAttendee(data.attendee as Attendee);
+          setLastScanned(data.attendee as Attendee);
+          setStep("workflow");
+          return { success: true, isOffline: false, requiresWorkflow: true };
+        }
         if (data.attendee) {
           setLastScanned(data.attendee as Attendee);
           trackComplete("kiosk", "scan");
@@ -476,6 +503,7 @@ export default function KioskMode({
       return result;
     },
     onSuccess: (result, attendeeId) => {
+      if ((result as any)?.requiresWorkflow) return; // Workflow step handles the rest
       const attendee = effectiveAttendees.find(a => a.id === attendeeId);
       if (attendee) {
         setLastScanned({ ...attendee, checkedIn: true } as Attendee);
@@ -520,6 +548,7 @@ export default function KioskMode({
     setGroupScannedMemberId(null);
     setGroupCheckedInMembers([]);
     setGroupPrintIndex(0);
+    setWorkflowAttendee(null);
   }, [groupCheckin]);
 
   // Kiosk idle timeout disabled through beta - re-enable by removing the `false &&` below
@@ -640,6 +669,34 @@ export default function KioskMode({
       setEnteredPin("");
     }
   };
+
+  const handleWorkflowComplete = useCallback(async () => {
+    if (!workflowAttendee || !exitPin || !eventId) return;
+    // Finalize the check-in now that workflow is done
+    try {
+      const res = await fetch(`/api/kiosk/${eventId}/checkin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: exitPin, attendeeId: workflowAttendee.id, skipWorkflow: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.attendee) {
+          setLastScanned(data.attendee as Attendee);
+        }
+      }
+    } catch {
+      // Check-in already succeeded conceptually
+    }
+    trackComplete("kiosk", "scan");
+    setWorkflowAttendee(null);
+    setStep("success");
+  }, [workflowAttendee, exitPin, eventId, trackComplete]);
+
+  const handleWorkflowCancel = useCallback(() => {
+    setWorkflowAttendee(null);
+    setStep("scanning");
+  }, []);
 
   const handleStartCheckIn = () => {
     trackStart("kiosk", "scan");
@@ -1740,6 +1797,33 @@ export default function KioskMode({
                     <Button variant="outline" onClick={handleGroupBack} data-testid="button-group-back">
                       <ArrowLeft className="h-4 w-4 mr-2" />
                       Back to Scan
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {step === "workflow" && workflowAttendee && kioskWorkflow && (
+                <div className="space-y-4">
+                  <div className="text-center mb-4">
+                    <h2 className="text-2xl font-semibold">
+                      {workflowAttendee.firstName} {workflowAttendee.lastName}
+                    </h2>
+                    <p className="text-muted-foreground">Please complete the following steps</p>
+                  </div>
+                  <WorkflowRunnerComponent
+                    eventId={eventId!}
+                    attendeeId={workflowAttendee.id}
+                    attendee={workflowAttendee}
+                    mode="kiosk"
+                    kioskPin={exitPin}
+                    initialWorkflow={kioskWorkflow}
+                    onComplete={handleWorkflowComplete}
+                    showSkipButton={false}
+                  />
+                  <div className="text-center pt-2">
+                    <Button variant="outline" onClick={handleWorkflowCancel}>
+                      <ArrowLeft className="h-4 w-4 mr-2" />
+                      Cancel
                     </Button>
                   </div>
                 </div>

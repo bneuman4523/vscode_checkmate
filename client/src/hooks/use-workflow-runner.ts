@@ -33,6 +33,7 @@ export interface WorkflowRunnerOptions {
   eventId: string;
   attendeeId: string;
   authToken?: string;
+  kioskPin?: string;
   mode: 'admin' | 'staff' | 'kiosk';
   initialWorkflow?: EventWorkflowWithSteps | null;
   onComplete?: (attendee: Attendee) => void;
@@ -51,7 +52,8 @@ const initialState: WorkflowState = {
 };
 
 export function useWorkflowRunner(options: WorkflowRunnerOptions) {
-  const { eventId, attendeeId, authToken, mode, initialWorkflow, onComplete, onError, onStepChange } = options;
+  const { eventId, attendeeId, authToken, kioskPin, mode, initialWorkflow, onComplete, onError, onStepChange } = options;
+  const isKioskPin = mode === 'kiosk' && !!kioskPin;
   
   const [state, setState] = useState<WorkflowState>(initialState);
   
@@ -93,14 +95,19 @@ export function useWorkflowRunner(options: WorkflowRunnerOptions) {
   const workflow = initialWorkflow !== undefined ? initialWorkflow : fetchedWorkflow;
   
   const { data: existingResponses } = useQuery<AttendeeWorkflowResponse[]>({
-    queryKey: mode === 'staff'
-      ? ['/api/staff/attendees', attendeeId, 'workflow-responses', authToken]
-      : ['/api/events', eventId, 'attendees', attendeeId, 'workflow-responses'],
+    queryKey: isKioskPin
+      ? ['/api/kiosk', eventId, 'attendees', attendeeId, 'workflow-responses']
+      : mode === 'staff'
+        ? ['/api/staff/attendees', attendeeId, 'workflow-responses', authToken]
+        : ['/api/events', eventId, 'attendees', attendeeId, 'workflow-responses'],
     queryFn: async () => {
+      // Kiosk PIN mode: no existing responses to fetch (fresh check-in)
+      if (isKioskPin) return [];
+
       const endpoint = mode === 'staff'
         ? `/api/staff/attendees/${attendeeId}/workflow-responses`
         : `/api/events/${eventId}/attendees/${attendeeId}/workflow-responses`;
-      
+
       const res = await fetch(endpoint, {
         headers: mode === 'staff' && authToken
           ? { 'Authorization': `Bearer ${authToken}` }
@@ -116,16 +123,21 @@ export function useWorkflowRunner(options: WorkflowRunnerOptions) {
     enabled: !!eventId && !!attendeeId && (mode !== 'staff' || !!authToken),
     staleTime: 30000,
   });
-  
+
   const { data: existingSignatures } = useQuery<AttendeeSignature[]>({
-    queryKey: mode === 'staff'
-      ? ['/api/staff/attendees', attendeeId, 'signatures', authToken]
-      : ['/api/events', eventId, 'attendees', attendeeId, 'signatures'],
+    queryKey: isKioskPin
+      ? ['/api/kiosk', eventId, 'attendees', attendeeId, 'signatures']
+      : mode === 'staff'
+        ? ['/api/staff/attendees', attendeeId, 'signatures', authToken]
+        : ['/api/events', eventId, 'attendees', attendeeId, 'signatures'],
     queryFn: async () => {
+      // Kiosk PIN mode: no existing signatures to fetch (fresh check-in)
+      if (isKioskPin) return [];
+
       const endpoint = mode === 'staff'
         ? `/api/staff/attendees/${attendeeId}/signatures`
         : `/api/events/${eventId}/attendees/${attendeeId}/signatures`;
-      
+
       const res = await fetch(endpoint, {
         headers: mode === 'staff' && authToken
           ? { 'Authorization': `Bearer ${authToken}` }
@@ -240,22 +252,28 @@ export function useWorkflowRunner(options: WorkflowRunnerOptions) {
   
   const saveResponsesMutation = useMutation({
     mutationFn: async (responses: QuestionResponse[]) => {
-      const endpoint = mode === 'staff'
-        ? `/api/staff/attendees/${attendeeId}/workflow-responses`
-        : `/api/events/${eventId}/attendees/${attendeeId}/workflow-responses`;
-      
+      const endpoint = isKioskPin
+        ? `/api/kiosk/${eventId}/attendees/${attendeeId}/workflow-responses`
+        : mode === 'staff'
+          ? `/api/staff/attendees/${attendeeId}/workflow-responses`
+          : `/api/events/${eventId}/attendees/${attendeeId}/workflow-responses`;
+
       const fetchHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...headers,
       };
-      
+
+      const body = isKioskPin
+        ? JSON.stringify({ pin: kioskPin, responses })
+        : JSON.stringify({ responses });
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: fetchHeaders,
         credentials: 'include',
-        body: JSON.stringify({ responses }),
+        body,
       });
-      
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || 'Failed to save responses');
@@ -267,25 +285,31 @@ export function useWorkflowRunner(options: WorkflowRunnerOptions) {
       onError?.(error.message);
     },
   });
-  
+
   const saveSignatureMutation = useMutation({
     mutationFn: async (data: { disclaimerId: string; signatureData: string }) => {
-      const endpoint = mode === 'staff'
-        ? `/api/staff/attendees/${attendeeId}/signatures`
-        : `/api/events/${eventId}/attendees/${attendeeId}/signatures`;
-      
+      const endpoint = isKioskPin
+        ? `/api/kiosk/${eventId}/attendees/${attendeeId}/signatures`
+        : mode === 'staff'
+          ? `/api/staff/attendees/${attendeeId}/signatures`
+          : `/api/events/${eventId}/attendees/${attendeeId}/signatures`;
+
       const fetchHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
         ...headers,
       };
-      
+
+      const body = isKioskPin
+        ? JSON.stringify({ pin: kioskPin, ...data })
+        : JSON.stringify(data);
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: fetchHeaders,
         credentials: 'include',
-        body: JSON.stringify(data),
+        body,
       });
-      
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.error || 'Failed to save signature');

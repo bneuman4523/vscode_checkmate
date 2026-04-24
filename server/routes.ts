@@ -2460,18 +2460,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Attendee not found" });
       }
 
+      const attendeeData = {
+        id: attendee.id, firstName: attendee.firstName, lastName: attendee.lastName,
+        email: attendee.email, company: attendee.company, title: attendee.title,
+        participantType: attendee.participantType, checkedIn: attendee.checkedIn,
+        checkedInAt: attendee.checkedInAt, badgePrinted: attendee.badgePrinted,
+        externalId: attendee.externalId,
+      };
+
       if (attendee.checkedIn) {
         return res.json({
           success: true,
           alreadyCheckedIn: true,
-          attendee: {
-            id: attendee.id, firstName: attendee.firstName, lastName: attendee.lastName,
-            email: attendee.email, company: attendee.company, title: attendee.title,
-            participantType: attendee.participantType, checkedIn: attendee.checkedIn,
-            checkedInAt: attendee.checkedInAt, badgePrinted: attendee.badgePrinted,
-            externalId: attendee.externalId,
-          },
+          attendee: attendeeData,
         });
+      }
+
+      // Check if workflow is active for kiosk — if so, don't auto-check-in
+      const skipWorkflow = req.body.skipWorkflow === true;
+      if (!skipWorkflow) {
+        const workflow = await storage.getEventWorkflowWithSteps(event.id);
+        const hasKioskWorkflow = workflow?.enabled && workflow?.enabledForKiosk &&
+          (workflow.steps?.filter(s => s.enabled).length ?? 0) > 0;
+        if (hasKioskWorkflow) {
+          return res.json({
+            success: true,
+            requiresWorkflow: true,
+            alreadyCheckedIn: false,
+            attendee: { ...attendeeData, checkedIn: false },
+          });
+        }
       }
 
       const updated = await storage.updateAttendee(attendeeId, {
@@ -2792,6 +2810,121 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       logger.error({ err: error }, "Error in kiosk walk-in registration");
       res.status(500).json({ error: "Walk-in registration failed" });
+    }
+  });
+
+  // Get workflow config for kiosk (PIN-protected)
+  app.post("/api/kiosk/:eventId/workflow", async (req, res) => {
+    try {
+      const { pin } = req.body;
+      if (!pin) return res.status(400).json({ error: "PIN is required" });
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const workflow = await storage.getEventWorkflowWithSteps(event.id);
+      if (!workflow || !workflow.enabled || !workflow.enabledForKiosk) {
+        return res.json(null);
+      }
+
+      const enabledSteps = workflow.steps.filter(s => s.enabled);
+      res.json({ ...workflow, steps: enabledSteps });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching kiosk workflow");
+      res.status(500).json({ error: "Failed to fetch workflow" });
+    }
+  });
+
+  // Save workflow responses (kiosk, PIN-protected)
+  app.post("/api/kiosk/:eventId/attendees/:attendeeId/workflow-responses", async (req, res) => {
+    try {
+      const { pin, responses } = z.object({
+        pin: z.string(),
+        responses: z.array(z.object({
+          questionId: z.string(),
+          responseValue: z.string().nullable().optional(),
+          responseValues: z.array(z.string()).nullable().optional(),
+        })),
+      }).parse(req.body);
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const attendee = await storage.getAttendee(req.params.attendeeId);
+      if (!attendee || attendee.eventId !== event.id) {
+        return res.status(404).json({ error: "Attendee not found" });
+      }
+
+      await storage.deleteAttendeeWorkflowResponses(req.params.attendeeId, event.id);
+      const saved = await Promise.all(
+        responses.map(r => storage.createAttendeeWorkflowResponse({
+          attendeeId: req.params.attendeeId,
+          eventId: event.id,
+          ...r,
+        }))
+      );
+      res.json(saved);
+    } catch (error) {
+      logger.error({ err: error }, "Error saving kiosk workflow responses");
+      res.status(500).json({ error: "Failed to save workflow responses" });
+    }
+  });
+
+  // Get signatures (kiosk, PIN-protected)
+  app.post("/api/kiosk/:eventId/attendees/:attendeeId/signatures/get", async (req, res) => {
+    try {
+      const { pin } = req.body;
+      if (!pin) return res.status(400).json({ error: "PIN is required" });
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
+
+      const signatures = await storage.getAttendeeSignatures(req.params.attendeeId);
+      res.json(signatures);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching kiosk signatures");
+      res.status(500).json({ error: "Failed to fetch signatures" });
+    }
+  });
+
+  // Save signature (kiosk, PIN-protected)
+  app.post("/api/kiosk/:eventId/attendees/:attendeeId/signatures", async (req, res) => {
+    try {
+      const data = z.object({
+        pin: z.string(),
+        disclaimerId: z.string(),
+        signatureData: z.string(),
+      }).parse(req.body);
+
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+      if (!validateKioskPin(event.kioskPin, data.pin, req.params.eventId, clientIp, res)) return;
+
+      const attendee = await storage.getAttendee(req.params.attendeeId);
+      if (!attendee || attendee.eventId !== event.id) {
+        return res.status(404).json({ error: "Attendee not found" });
+      }
+
+      const signature = await storage.createAttendeeSignature({
+        attendeeId: req.params.attendeeId,
+        disclaimerId: data.disclaimerId,
+        signatureData: data.signatureData,
+      });
+      res.json(signature);
+    } catch (error) {
+      logger.error({ err: error }, "Error saving kiosk signature");
+      res.status(500).json({ error: "Failed to save signature" });
     }
   });
 
