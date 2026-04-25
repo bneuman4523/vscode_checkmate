@@ -52,7 +52,7 @@ function tryMatchById(attendees: Attendee[], value: string, suffix?: string): Fo
   let found = attendees.find((a) => a.externalId === value);
   if (found) return { type: "found", attendee: found, matchedBy: suffix ? `Registration Code (${suffix})` : "Registration Code" };
 
-  found = attendees.find((a) => (a as any).externalProfileId === value);
+  found = attendees.find((a) => a.externalProfileId === value);
   if (found) return { type: "found", attendee: found, matchedBy: suffix ? `External Profile ID (${suffix})` : "External Profile ID" };
 
   found = attendees.find((a) => a.id === value);

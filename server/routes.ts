@@ -5,6 +5,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertPrinterSchema, insertCustomerSchema, insertEventSchema, insertBadgeTemplateSchema, insertCustomerIntegrationSchema, insertEventIntegrationSchema, insertAttendeeSchema, updateAttendeeSchema, insertIntegrationConnectionSchema, insertSessionSchema, insertUserSchema, insertIntegrationEndpointConfigSchema, insertEventCodeMappingSchema, insertSessionCodeMappingSchema, insertEventBadgeTemplateOverrideSchema, insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema, insertAttendeeSignatureSchema, insertEventConfigurationTemplateSchema, partnerCustomerAssignments } from "@shared/schema";
 import { z } from "zod";
+import rateLimit from "express-rate-limit";
 import {
   encryptCredential,
   maskCredential,
@@ -2068,8 +2069,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
 
+  // Rate limiter for expensive operations (event copy, bulk imports)
+  const expensiveOpLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: penTestMode ? 100 : 5, // 5 per minute per user
+    keyGenerator: (req) => req.dbUser?.id || req.ip || 'unknown',
+    message: { error: "Too many requests. Please wait a moment and try again." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   // Copy/duplicate an event with all its configuration
-  app.post("/api/events/:sourceEventId/copy", requireAuth, requireRole(['super_admin', 'partner', 'admin', 'manager']), async (req, res) => {
+  app.post("/api/events/:sourceEventId/copy", requireAuth, requireRole(['super_admin', 'partner', 'admin', 'manager']), expensiveOpLimiter, async (req, res) => {
     try {
       const sourceEvent = await storage.getEvent(req.params.sourceEventId);
       if (!sourceEvent) {

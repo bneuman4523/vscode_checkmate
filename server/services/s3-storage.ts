@@ -26,7 +26,7 @@ const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
 };
 
 function uploadRequireAuth(req: Request, res: Response, next: NextFunction) {
-  const dbUser = (req as any).dbUser;
+  const dbUser = req.dbUser;
   if (!dbUser) {
     return res.status(401).json({ error: "Authentication required" });
   }

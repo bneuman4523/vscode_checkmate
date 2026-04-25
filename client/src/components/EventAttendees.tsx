@@ -237,7 +237,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
             templatesCount: 0, // Templates are cached separately
           });
 
-          console.log(`[EventAttendees] Cached ${offlineAttendees.length} attendees to IndexedDB for offline kiosk use`);
+          // Cached attendees to IndexedDB for offline kiosk use
         } catch (err) {
           console.warn('[EventAttendees] Failed to cache attendees to IndexedDB:', err);
         }

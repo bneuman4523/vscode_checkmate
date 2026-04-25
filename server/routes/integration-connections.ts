@@ -1007,7 +1007,7 @@ export function registerIntegrationConnectionRoutes(app: Express): void {
 
       for (const dataType of dataTypes) {
         const existing = await storage.getEventSyncState(eventId, dataType);
-        const syncTemplates = integration.syncTemplates as any;
+        const syncTemplates = integration.syncTemplates;
         const templateKey = dataType === 'session_registrations' ? 'sessionRegistrations' : dataType;
         const template = syncTemplates?.[templateKey];
         
@@ -1112,7 +1112,7 @@ export function registerIntegrationConnectionRoutes(app: Express): void {
 
       // Get or create sync state, always re-resolve endpoint from current integration templates
       const { syncOrchestrator: orchestrator } = await import("./services/sync-orchestrator");
-      const syncTemplates = integration.syncTemplates as any;
+      const syncTemplates = integration.syncTemplates;
       const templateKey = dataType === 'session_registrations' ? 'sessionRegistrations' : dataType;
       const template = syncTemplates?.[templateKey];
       
@@ -1546,7 +1546,7 @@ export function registerIntegrationConnectionRoutes(app: Express): void {
       // Update sync state with result — only advance timestamp if records were returned
       const now = new Date();
       const serverTimestamp = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}T${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
-      const defaultSyncSettings = (integration.defaultSyncSettings as any) || {};
+      const defaultSyncSettings = integration.defaultSyncSettings || {};
       const nextSyncAt = syncOrchestrator.calculateNextSyncTime(
         { startDate: event.startDate, endDate: event.endDate },
         defaultSyncSettings

@@ -130,7 +130,7 @@ class SyncOrchestrator {
     // Create API client
     const apiClient = new ApiClient({
       baseUrl: integration.baseUrl,
-      authStrategy: integration.authType as any,
+      authStrategy: integration.authType,
       credentialsRef: integration.credentialsRef || undefined,
       rateLimit: integration.rateLimitPolicy ? {
         requestsPerMinute: integration.rateLimitPolicy.requestsPerMinute || 60,
@@ -313,7 +313,7 @@ class SyncOrchestrator {
 
     const apiClient = new ApiClient({
       baseUrl: integration.baseUrl,
-      authStrategy: integration.authType as any,
+      authStrategy: integration.authType,
       credentialsRef: integration.credentialsRef || undefined,
     });
 
@@ -354,7 +354,7 @@ class SyncOrchestrator {
   }> {
     const apiClient = new ApiClient({
       baseUrl: integration.baseUrl,
-      authStrategy: integration.authType as any,
+      authStrategy: integration.authType,
       credentialsRef: integration.credentialsRef || undefined,
     });
 
@@ -424,7 +424,7 @@ class SyncOrchestrator {
 
     const apiClient = new ApiClient({
       baseUrl: integration.baseUrl,
-      authStrategy: integration.authType as any,
+      authStrategy: integration.authType,
       credentialsRef: integration.credentialsRef || undefined,
       rateLimit: integration.rateLimitPolicy ? {
         requestsPerMinute: integration.rateLimitPolicy.requestsPerMinute || 60,
@@ -1357,7 +1357,7 @@ class SyncOrchestrator {
   }> {
     const startTime = Date.now();
     const { integration, customerId, authHeaders, delayBetweenStepsMs = 3000, onProgress } = config;
-    const syncTemplates = integration.syncTemplates as any;
+    const syncTemplates = integration.syncTemplates;
     
     const result = {
       success: true,
@@ -2145,7 +2145,7 @@ class SyncOrchestrator {
 
       const apiClient = new ApiClient({
         baseUrl: integration.baseUrl,
-        authStrategy: integration.authType as any,
+        authStrategy: integration.authType,
         credentialsRef: integration.credentialsRef || undefined,
         rateLimit: integration.rateLimitPolicy ? {
           requestsPerMinute: integration.rateLimitPolicy.requestsPerMinute || 60,
@@ -2301,7 +2301,7 @@ class SyncOrchestrator {
   }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
     const { integration, event, authHeaders, syncState } = params;
     const startTime = Date.now();
-    const syncTemplates = integration.syncTemplates as any;
+    const syncTemplates = integration.syncTemplates;
 
     let processedCount = 0;
     let createdCount = 0;
@@ -2473,7 +2473,7 @@ class SyncOrchestrator {
   }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
     const { integration, event, authHeaders, syncState } = params;
     const startTime = Date.now();
-    const syncTemplates = integration.syncTemplates as any;
+    const syncTemplates = integration.syncTemplates;
 
     let processedCount = 0;
     let createdCount = 0;
@@ -2612,7 +2612,7 @@ class SyncOrchestrator {
   }): Promise<{ processedCount: number; createdCount: number; updatedCount: number; errorCount: number; errors?: any[] }> {
     const { integration, event, authHeaders, syncState } = params;
     const startTime = Date.now();
-    const syncTemplates = integration.syncTemplates as any;
+    const syncTemplates = integration.syncTemplates;
 
     let processedCount = 0;
     let createdCount = 0;

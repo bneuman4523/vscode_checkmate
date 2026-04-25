@@ -400,7 +400,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                             title={selectedAttendee.title || undefined}
                             participantType={selectedAttendee.participantType || "General"}
                             externalId={selectedAttendee.externalId || undefined}
-                            orderCode={(selectedAttendee as any).orderCode || undefined}
+                            orderCode={selectedAttendee.orderCode || undefined}
                             templateConfig={getTemplateConfig(selectedTemplate)}
                             renderSide="front"
                             scale={0.6}
@@ -418,7 +418,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                             title={selectedAttendee.title || undefined}
                             participantType={selectedAttendee.participantType || "General"}
                             externalId={selectedAttendee.externalId || undefined}
-                            orderCode={(selectedAttendee as any).orderCode || undefined}
+                            orderCode={selectedAttendee.orderCode || undefined}
                             templateConfig={getTemplateConfig(selectedTemplate)}
                             renderSide="back"
                             scale={0.6}
@@ -437,7 +437,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                         title={selectedAttendee.title || undefined}
                         participantType={selectedAttendee.participantType || "General"}
                         externalId={selectedAttendee.externalId || undefined}
-                        orderCode={(selectedAttendee as any).orderCode || undefined}
+                        orderCode={selectedAttendee.orderCode || undefined}
                         templateConfig={getTemplateConfig(selectedTemplate)}
                         scale={0.6}
                         onLoadFont={fontContext?.loadFont}

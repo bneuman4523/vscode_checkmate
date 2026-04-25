@@ -172,7 +172,7 @@ export function BadgePrintPreviewDialog({
                           title={attendee.title || undefined}
                           participantType={attendee.participantType || "General"}
                           externalId={attendee.externalId || undefined}
-                          orderCode={(attendee as any).orderCode || undefined}
+                          orderCode={attendee.orderCode || undefined}
                           customFields={attendee.customFields as Record<string, string> | undefined}
                           templateConfig={getPreviewTemplateConfig(template) as any}
                           renderSide="front"
@@ -191,7 +191,7 @@ export function BadgePrintPreviewDialog({
                           title={attendee.title || undefined}
                           participantType={attendee.participantType || "General"}
                           externalId={attendee.externalId || undefined}
-                          orderCode={(attendee as any).orderCode || undefined}
+                          orderCode={attendee.orderCode || undefined}
                           customFields={attendee.customFields as Record<string, string> | undefined}
                           templateConfig={getPreviewTemplateConfig(template) as any}
                           renderSide="back"
@@ -211,7 +211,7 @@ export function BadgePrintPreviewDialog({
                       title={attendee.title || undefined}
                       participantType={attendee.participantType || "General"}
                       externalId={attendee.externalId || undefined}
-                      orderCode={(attendee as any).orderCode || undefined}
+                      orderCode={attendee.orderCode || undefined}
                       customFields={attendee.customFields as Record<string, string> | undefined}
                       templateConfig={getPreviewTemplateConfig(template)}
                       scale={0.6}

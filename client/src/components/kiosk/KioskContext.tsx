@@ -198,6 +198,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
   const [isCached, setIsCached] = useState(false);
 
   const logoTapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const printResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const autoCachedRef = useRef(false);
   const previousThemeRef = useRef("");
 
@@ -460,6 +461,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
   const kioskTimeoutEnabled = kioskTimeoutMs > 0;
 
   const handleKioskTimeout = useCallback(() => {
+    if (printResetTimeoutRef.current) { clearTimeout(printResetTimeoutRef.current); printResetTimeoutRef.current = null; }
     setStep("welcome"); setLastScanned(null); setScanError(null); setManualInput("");
     groupCheckin.reset(); setGroupScannedMemberId(null); setGroupCheckedInMembers([]); setGroupPrintIndex(0); setWorkflowAttendee(null);
   }, [groupCheckin]);
@@ -557,7 +559,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
       if (!navigator.onLine && offlineAttendees.length > 0) {
         const found = groupCheckin.offlineLookup(scannedValue, offlineAttendees);
         if (found) {
-          const scannedMember = offlineAttendees.find(a => (a as any).orderCode === scannedValue || (a as any).externalId === scannedValue);
+          const scannedMember = offlineAttendees.find(a => a.orderCode === scannedValue || a.externalId === scannedValue);
           setGroupScannedMemberId(scannedMember?.id || null);
           toast({ title: "Group Found (Offline)", description: "Using cached data. Will sync when online." });
           setStep("group");
@@ -763,7 +765,8 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
         setGroupPrintIndex(1); await printBadgeForMember(membersToPrint[0]);
         toast({ title: "Badge Sent to Printer", description: selectedPrinter?.type === 'printnode' ? `Sent to ${selectedPrinter.printerName || 'cloud printer'}` : "Your badge is being printed" });
       }
-      setTimeout(() => { handleReset(); }, 3000);
+      if (printResetTimeoutRef.current) clearTimeout(printResetTimeoutRef.current);
+      printResetTimeoutRef.current = setTimeout(() => { handleReset(); }, 3000);
     } catch (error) {
       toast({ title: "Print Failed", description: "Could not print badge. Please try again or contact staff.", variant: "destructive" });
       trackAbandon("kiosk", "print"); setStep("success");

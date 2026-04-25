@@ -34,7 +34,7 @@ export function createAssistantRouter(storage: IStorage) {
   });
 
   router.post("/chat", async (req: Request, res: Response) => {
-    const dbUser = (req as any).dbUser;
+    const dbUser = req.dbUser;
     if (!dbUser) {
       res.status(401).json({ error: "Not authenticated" });
       return;
@@ -216,7 +216,7 @@ export function createAssistantRouter(storage: IStorage) {
   });
 
   router.get("/setup-status/:eventId", async (req: Request, res: Response) => {
-    const dbUser = (req as any).dbUser;
+    const dbUser = req.dbUser;
     if (!dbUser) {
       res.status(401).json({ error: "Not authenticated" });
       return;
