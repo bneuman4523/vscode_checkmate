@@ -5558,18 +5558,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/settings/feature-flags", requireAuth, async (req, res) => {
     try {
+      // Platform-wide settings (not per-account)
       const badgeFlipSetting = await storage.getSystemSetting("feature_badge_flip_preview");
       const betaFeedbackSetting = await storage.getSystemSetting("feature_beta_feedback");
-      const kioskWalkinFlag = await storage.getFeatureFlagByKey("kiosk_walkin_registration");
-      const groupCheckinFlag = await storage.getFeatureFlagByKey("group_checkin");
-      const eventSyncFlag = await storage.getFeatureFlagByKey("event_sync");
+
+      // Per-account feature flags — read from account_feature_configs when customer context exists
+      const customerId = getEffectiveCustomerId(req);
+      let kioskWalkinEnabled = false;
+      let groupCheckinEnabled = false;
+      let eventSyncEnabled = true; // Default ON
+
+      if (customerId) {
+        const { getAccountFeatureConfigs } = await import("./services/license-provisioning");
+        const configs = await getAccountFeatureConfigs(customerId);
+        const configMap = new Map(configs.map(c => [c.featureKey, c.enabled]));
+        kioskWalkinEnabled = configMap.get("walkin_registration") ?? false;
+        groupCheckinEnabled = configMap.get("group_checkin") ?? false;
+        eventSyncEnabled = configMap.get("event_sync") ?? true;
+      } else {
+        // No customer context (e.g., super admin root level) — fall back to platform flags
+        const kioskWalkinFlag = await storage.getFeatureFlagByKey("kiosk_walkin_registration");
+        const groupCheckinFlag = await storage.getFeatureFlagByKey("group_checkin");
+        kioskWalkinEnabled = kioskWalkinFlag?.enabled ?? false;
+        groupCheckinEnabled = groupCheckinFlag?.enabled ?? false;
+      }
+
       res.json({
         badgeFlipPreview: badgeFlipSetting?.value === "true",
         betaFeedback: betaFeedbackSetting?.value === "true",
         penTestMode: process.env.PEN_TEST_MODE === "true",
-        kioskWalkinRegistration: kioskWalkinFlag?.enabled ?? false,
-        groupCheckin: groupCheckinFlag?.enabled ?? false,
-        eventSync: eventSyncFlag?.enabled ?? true, // Default ON to preserve existing behavior
+        kioskWalkinRegistration: kioskWalkinEnabled,
+        groupCheckin: groupCheckinEnabled,
+        eventSync: eventSyncEnabled,
       });
     } catch (error) {
       logger.error({ err: error }, "Error fetching feature flags");

@@ -92,6 +92,7 @@ const FEATURE_DEFINITIONS: FeatureDef[] = [
   { key: "winner_tracking", name: "Winner Lifecycle Tracking", category: "giveaways", basic: false, premium: true },
   { key: "per_event_giveaways", name: "Per-Event Giveaways", category: "giveaways", basic: false, premium: "coming_soon" },
 
+  { key: "event_sync", name: "Event Sync & Integration", category: "integrations", basic: true, premium: true },
   { key: "csv_import_export", name: "CSV Import/Export", category: "integrations", basic: true, premium: true },
   { key: "auto_event_discovery", name: "Auto Event Discovery", category: "integrations", basic: true, premium: true },
   { key: "two_way_sync", name: "Two-Way Sync", category: "integrations", basic: true, premium: true },
