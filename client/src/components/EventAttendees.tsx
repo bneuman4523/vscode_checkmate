@@ -474,24 +474,24 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
       fontFamily: template.fontFamily || "Arial",
       includeQR: template.includeQR ?? true,
       qrPosition: template.qrPosition || "bottom-right",
-      customQrPosition: (template as any).customQrPosition || undefined,
-      qrCodeConfig: (eventData?.badgeSettings as any)?.qrCodeConfigOverride || (template.qrCodeConfig as any) || {
+      customQrPosition: template.customQrPosition || undefined,
+      qrCodeConfig: (eventData?.badgeSettings as any)?.qrCodeConfigOverride || template.qrCodeConfig || {
         embedType: "externalId" as const,
         fields: ["externalId"],
         separator: "|",
         includeLabel: false,
       },
-      mergeFields: (template.mergeFields as any[]) || [],
-      imageElements: (template as any).imageElements || [],
-      layoutMode: (template as any).layoutMode || 'single',
-      backSideMode: (template as any).backSideMode || 'blank',
-      backSideMergeFields: (template as any).backSideMergeFields || [],
-      backSideImageElements: (template as any).backSideImageElements || [],
-      backSideIncludeQR: (template as any).backSideIncludeQR ?? false,
-      backSideQrPosition: (template as any).backSideQrPosition || 'bottom-right',
-      backSideCustomQrPosition: (template as any).backSideCustomQrPosition || undefined,
-      backSideQrCodeConfig: (template as any).backSideQrCodeConfig || undefined,
-      backSideBackgroundColor: (template as any).backSideBackgroundColor || undefined,
+      mergeFields: template.mergeFields || [],
+      imageElements: template.imageElements || [],
+      layoutMode: template.layoutMode || 'single',
+      backSideMode: template.backSideMode || 'blank',
+      backSideMergeFields: template.backSideMergeFields || [],
+      backSideImageElements: template.backSideImageElements || [],
+      backSideIncludeQR: template.backSideIncludeQR ?? false,
+      backSideQrPosition: template.backSideQrPosition || 'bottom-right',
+      backSideCustomQrPosition: template.backSideCustomQrPosition || undefined,
+      backSideQrCodeConfig: template.backSideQrCodeConfig || undefined,
+      backSideBackgroundColor: template.backSideBackgroundColor || undefined,
     };
   };
 
@@ -1188,7 +1188,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
                   includeQR: template.includeQR ?? true,
                   qrPosition: template.qrPosition || "bottom-right",
                   qrCodeConfig: template.qrCodeConfig as any,
-                  mergeFields: (template.mergeFields as any[]) || [],
+                  mergeFields: template.mergeFields || [],
                 };
               })()}
             />

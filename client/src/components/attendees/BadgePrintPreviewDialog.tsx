@@ -155,12 +155,12 @@ export function BadgePrintPreviewDialog({
                   includeQR={template?.includeQR ?? true}
                   qrEmbedType={(template?.qrCodeConfig as any)?.embedType}
                   participantTypes={template?.participantTypes as string[] | undefined}
-                  layoutMode={(template as any)?.layoutMode || 'single'}
+                  layoutMode={template?.layoutMode || 'single'}
                 />
               </div>
 
               <div className="flex justify-center p-4 bg-muted/50 rounded-lg">
-                {(template as any)?.layoutMode === 'foldable' ? (
+                {template?.layoutMode === 'foldable' ? (
                   <FlippableBadge
                     front={
                       <div className="border-2 border-border rounded-lg overflow-hidden shadow-lg">

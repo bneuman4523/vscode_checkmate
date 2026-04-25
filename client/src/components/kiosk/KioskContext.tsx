@@ -711,7 +711,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
       if (mapping?.[1]?.templateId) template = templates.find(t => t.id === mapping[1].templateId);
     }
     if (!template) template = templates.find(t => t.id === event?.defaultBadgeTemplateId) || templates[0];
-    const templateConfig = { width: template?.width || 4, height: template?.height || 3, backgroundColor: template?.backgroundColor || "#ffffff", textColor: template?.textColor || "#000000", accentColor: template?.accentColor || "#3b82f6", fontFamily: template?.fontFamily || "Arial", includeQR: template?.includeQR ?? true, qrPosition: template?.qrPosition || "bottom-right", customQrPosition: (template as any)?.customQrPosition || undefined, qrCodeConfig: eventBadgeSettings?.qrCodeConfigOverride || (template?.qrCodeConfig as any) || undefined, mergeFields: (template?.mergeFields as any[]) || [], imageElements: (template as any)?.imageElements || [] };
+    const templateConfig = { width: template?.width || 4, height: template?.height || 3, backgroundColor: template?.backgroundColor || "#ffffff", textColor: template?.textColor || "#000000", accentColor: template?.accentColor || "#3b82f6", fontFamily: template?.fontFamily || "Arial", includeQR: template?.includeQR ?? true, qrPosition: template?.qrPosition || "bottom-right", customQrPosition: template?.customQrPosition || undefined, qrCodeConfig: eventBadgeSettings?.qrCodeConfigOverride || (template?.qrCodeConfig as any) || undefined, mergeFields: template?.mergeFields || [], imageElements: template?.imageElements || [] };
 
     if (selectedPrinter?.type === 'printnode' && selectedPrinter.printNodeId) {
       const printerName = selectedPrinter.printerName || '';
