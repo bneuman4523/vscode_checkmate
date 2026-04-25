@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -129,8 +130,17 @@ export default function UserManagement() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: UserFormValues) => {
-      return apiRequest("POST", "/api/users", data);
+    mutationFn: async (data: UserFormValues & { partnerCustomerIds?: string[] }) => {
+      const { partnerCustomerIds, ...userData } = data;
+      const res = await apiRequest("POST", "/api/users", userData);
+      const newUser = await res.json();
+      // If partner, save their customer assignments
+      if (userData.role === "partner" && partnerCustomerIds?.length) {
+        await apiRequest("PUT", `/api/users/${newUser.id}/partner-assignments`, {
+          customerIds: partnerCustomerIds,
+        });
+      }
+      return newUser;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
@@ -138,17 +148,24 @@ export default function UserManagement() {
       toast({ title: "User created successfully" });
     },
     onError: (error: Error) => {
-      toast({ 
-        title: "Failed to create user", 
+      toast({
+        title: "Failed to create user",
         description: error.message,
-        variant: "destructive" 
+        variant: "destructive"
       });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<UserFormValues> }) => {
-      return apiRequest("PATCH", `/api/users/${id}`, data);
+    mutationFn: async ({ id, data }: { id: string; data: Partial<UserFormValues> & { partnerCustomerIds?: string[] } }) => {
+      const { partnerCustomerIds, ...userData } = data;
+      await apiRequest("PATCH", `/api/users/${id}`, userData);
+      // If updating to/as partner, save their customer assignments
+      if (userData.role === "partner" && partnerCustomerIds !== undefined) {
+        await apiRequest("PUT", `/api/users/${id}/partner-assignments`, {
+          customerIds: partnerCustomerIds,
+        });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
@@ -156,10 +173,10 @@ export default function UserManagement() {
       toast({ title: "User updated successfully" });
     },
     onError: (error: Error) => {
-      toast({ 
-        title: "Failed to update user", 
+      toast({
+        title: "Failed to update user",
         description: error.message,
-        variant: "destructive" 
+        variant: "destructive"
       });
     },
   });
@@ -529,7 +546,7 @@ interface UserDialogProps {
   customers: Customer[];
   defaultCustomerId: string | null | undefined;
   availableRoles: UserRole[];
-  onSubmit: (data: UserFormValues) => void;
+  onSubmit: (data: UserFormValues & { partnerCustomerIds?: string[] }) => void;
   isPending: boolean;
 }
 
@@ -545,6 +562,24 @@ function UserDialog({
   onSubmit,
   isPending,
 }: UserDialogProps) {
+  const [partnerCustomerIds, setPartnerCustomerIds] = useState<string[]>([]);
+
+  // Fetch existing partner assignments when editing a partner user
+  const { data: existingAssignments } = useQuery<Array<{ customerId: string }>>({
+    queryKey: ["/api/users", user?.id, "partner-assignments"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/users/${user!.id}/partner-assignments`);
+      return res.json();
+    },
+    enabled: !!user && user.role === "partner" && mode === "edit" && open,
+  });
+
+  useEffect(() => {
+    if (existingAssignments) {
+      setPartnerCustomerIds(existingAssignments.map(a => a.customerId));
+    }
+  }, [existingAssignments]);
+
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userFormSchema),
     defaultValues: {
@@ -583,6 +618,7 @@ function UserDialog({
           isActive: true,
           sendInviteSMS: true,
         });
+        setPartnerCustomerIds([]);
       }
     }
   }, [open, mode, user, defaultCustomerId, form]);
@@ -593,7 +629,7 @@ function UserDialog({
     if (data.role === "super_admin" || data.role === "partner") {
       data.customerId = null;
     }
-    onSubmit(data);
+    onSubmit({ ...data, partnerCustomerIds: data.role === "partner" ? partnerCustomerIds : undefined });
   };
 
   return (
@@ -711,6 +747,43 @@ function UserDialog({
               )}
             />
             
+            {isSuperAdmin && selectedRole === "partner" && customers.length > 0 && (
+              <div className="space-y-2">
+                <FormLabel>Assigned Accounts <span className="text-destructive">*</span></FormLabel>
+                <p className="text-xs text-muted-foreground">
+                  Select which accounts this partner can access
+                </p>
+                <div className="border rounded-md max-h-[200px] overflow-y-auto">
+                  {customers.map((customer) => (
+                    <label
+                      key={customer.id}
+                      className="flex items-center gap-3 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                    >
+                      <Checkbox
+                        checked={partnerCustomerIds.includes(customer.id)}
+                        onCheckedChange={(checked) => {
+                          setPartnerCustomerIds(prev =>
+                            checked
+                              ? [...prev, customer.id]
+                              : prev.filter(id => id !== customer.id)
+                          );
+                        }}
+                      />
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <span className="text-sm truncate">{customer.name}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                {partnerCustomerIds.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {partnerCustomerIds.length} account{partnerCustomerIds.length !== 1 ? "s" : ""} selected
+                  </p>
+                )}
+              </div>
+            )}
+
             {isSuperAdmin && selectedRole !== "super_admin" && selectedRole !== "partner" && (
               <FormField
                 control={form.control}
