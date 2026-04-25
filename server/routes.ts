@@ -5754,7 +5754,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return {
           key: def.key,
           name: def.name,
+          description: def.description || null,
           category: def.category,
+          basic: def.basic,
+          premium: def.premium,
           enabled: config?.enabled ?? false,
           metadata: config?.metadata || def.metadata || null,
         };
