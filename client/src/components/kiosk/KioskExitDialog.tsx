@@ -26,7 +26,9 @@ export function KioskExitDialog() {
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
+          <label htmlFor="kiosk-exit-pin" className="sr-only">Exit PIN</label>
           <Input
+            id="kiosk-exit-pin"
             type="password"
             inputMode="numeric"
             pattern="[0-9]*"
@@ -41,10 +43,11 @@ export function KioskExitDialog() {
             className="text-center text-2xl tracking-widest"
             maxLength={8}
             autoFocus
+            aria-describedby={pinError ? "pin-error" : undefined}
             data-testid="input-exit-pin-dialog"
           />
           {pinError && (
-            <p className="text-sm text-destructive text-center">{pinError}</p>
+            <p id="pin-error" role="alert" className="text-sm text-destructive text-center">{pinError}</p>
           )}
           <div className="flex gap-3">
             <Button

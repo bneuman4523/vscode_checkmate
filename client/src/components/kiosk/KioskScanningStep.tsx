@@ -66,7 +66,9 @@ export function KioskScanningStep() {
 
         <TabsContent value="manual" className="space-y-4 mt-0 pt-4">
           <div className="flex gap-2">
+            <label htmlFor="kiosk-manual-search" className="sr-only">Name or email</label>
             <Input
+              id="kiosk-manual-search"
               placeholder="Enter your full name or email exactly as registered..."
               value={manualInput}
               onChange={(e) => {
@@ -76,6 +78,7 @@ export function KioskScanningStep() {
               onKeyDown={(e) => e.key === "Enter" && handleManualSearch()}
               className="h-14 text-lg"
               autoFocus
+              aria-describedby={scanError ? "scan-error" : undefined}
               data-testid="input-kiosk-search"
             />
             <Button
@@ -96,15 +99,15 @@ export function KioskScanningStep() {
       </Tabs>
 
       {scanError && (
-        <div className="flex items-center justify-center gap-2 text-destructive">
+        <div id="scan-error" role="alert" className="flex items-center justify-center gap-2 text-destructive">
           <XCircle className="h-5 w-5" aria-hidden="true" />
           <span>{scanError}</span>
         </div>
       )}
 
       {checkInMutation.isPending && (
-        <div className="flex items-center justify-center gap-2 text-muted-foreground">
-          <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div role="status" aria-live="polite" className="flex items-center justify-center gap-2 text-muted-foreground">
+          <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" aria-hidden="true" />
           <span>Checking in...</span>
         </div>
       )}

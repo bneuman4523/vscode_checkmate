@@ -48,23 +48,28 @@ export function KioskWalkinStep() {
                 .filter(f => f.alwaysShow || enabledFields.includes(f.key))
                 .map(field => (
                   <div key={field.key}>
+                    <label htmlFor={`walkin-${field.key}`} className="sr-only">{field.label}</label>
                     <Input
+                      id={`walkin-${field.key}`}
                       type={field.type}
                       placeholder={`${field.label}${requiredFields.includes(field.key) || field.alwaysShow ? ' *' : ''}`}
                       value={walkinForm[field.key] || ''}
                       onChange={(e) => setWalkinForm({ ...walkinForm, [field.key]: e.target.value })}
                       className="h-12 text-base"
+                      aria-required={requiredFields.includes(field.key) || field.alwaysShow}
                       data-testid={`input-walkin-${field.key}`}
                     />
                   </div>
                 ))}
 
               {enabledFields.includes('participantType') && availableTypes.length > 1 && (
+                <div>
+                  <label htmlFor="walkin-participantType" className="sr-only">Attendee Type</label>
                 <Select
                   value={walkinForm.participantType || config?.defaultType || availableTypes[0]}
                   onValueChange={(value) => setWalkinForm({ ...walkinForm, participantType: value })}
                 >
-                  <SelectTrigger className="h-12 text-base" data-testid="select-walkin-type">
+                  <SelectTrigger id="walkin-participantType" className="h-12 text-base" data-testid="select-walkin-type">
                     <SelectValue placeholder="Select attendee type..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -73,6 +78,7 @@ export function KioskWalkinStep() {
                     ))}
                   </SelectContent>
                 </Select>
+                </div>
               )}
             </>
           );
@@ -80,8 +86,8 @@ export function KioskWalkinStep() {
       </div>
 
       {walkinError && (
-        <div className="flex items-center justify-center gap-2 text-destructive">
-          <XCircle className="h-5 w-5" />
+        <div role="alert" className="flex items-center justify-center gap-2 text-destructive">
+          <XCircle className="h-5 w-5" aria-hidden="true" />
           <span>{walkinError}</span>
         </div>
       )}

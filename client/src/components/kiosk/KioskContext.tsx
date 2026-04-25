@@ -10,7 +10,7 @@ import { kioskPreCacheService, type PreCacheProgress } from "@/services/kiosk-pr
 import { offlineDB } from "@/lib/offline-db";
 import { useNetworkPrint } from "@/hooks/use-network-print";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Attendee, Event, BadgeTemplate, KioskBrandingConfig } from "@shared/schema";
 import type { OfflineAttendee } from "@/lib/offline-db";
 import type { KioskSettings } from "@/components/KioskLauncher";
@@ -280,13 +280,23 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
     return () => { unsubscribe(); };
   }, [eventId, updateSyncStatus, checkCacheStatus]);
 
-  // ── Data queries ───────────────────────────────────────────────────────
+  // ── Fetch helpers ───────────────────────────────────────────────────────
   const staffHeaders = staffToken ? { 'Authorization': `Bearer ${staffToken}`, 'Content-Type': 'application/json' } : undefined;
   const staffFetch = useCallback(async (url: string) => {
     const res = await fetch(url, staffHeaders ? { headers: staffHeaders } : undefined);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }, [staffHeaders]);
+
+  /** POST to a PIN-protected kiosk endpoint with consistent error handling */
+  const kioskPost = useCallback(async (url: string, body: Record<string, unknown>): Promise<Response> => {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: exitPin, ...body }),
+    });
+    return res;
+  }, [exitPin]);
 
   const eventQueryOptions = staffToken
     ? {
@@ -415,7 +425,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
         return { success: true, isOffline: false };
       }
       if (exitPin && eventId) {
-        const res = await fetch(`/api/kiosk/${eventId}/checkin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, attendeeId }) });
+        const res = await kioskPost(`/api/kiosk/${eventId}/checkin`, { attendeeId });
         if (!res.ok) { const errData = await res.json().catch(() => ({ error: 'Check-in failed' })); throw new Error(errData.error || 'Check-in failed'); }
         const data = await res.json();
         if (data.requiresWorkflow && data.attendee) {
@@ -517,7 +527,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
   const handleWorkflowComplete = useCallback(async () => {
     if (!workflowAttendee || !exitPin || !eventId) return;
     try {
-      const res = await fetch(`/api/kiosk/${eventId}/checkin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, attendeeId: workflowAttendee.id, skipWorkflow: true }) });
+      const res = await kioskPost(`/api/kiosk/${eventId}/checkin`, { attendeeId: workflowAttendee.id, skipWorkflow: true });
       if (res.ok) { const data = await res.json(); if (data.attendee) setLastScanned(data.attendee as Attendee); }
     } catch {}
     trackComplete("kiosk", "scan"); setWorkflowAttendee(null); setStep("success");
@@ -534,7 +544,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
   const attemptGroupLookup = useCallback(async (scannedValue: string): Promise<boolean> => {
     if (!isGroupCheckinEnabled || !exitPin || !eventId) return false;
     try {
-      const res = await fetch(`/api/kiosk/${eventId}/group-lookup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, orderCode: scannedValue }) });
+      const res = await kioskPost(`/api/kiosk/${eventId}/group-lookup`, { orderCode: scannedValue });
       if (!res.ok) throw new Error(`Group lookup failed (${res.status})`);
       const data = await res.json();
       if (!data.found || !data.members || data.members.length <= 1) return false;
@@ -564,7 +574,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
     if (exitPin && eventId) {
       if (isGroupCheckinEnabled) { const isGroup = await attemptGroupLookup(manualInput.trim()); if (isGroup) { setManualInput(""); return; } }
       try {
-        const res = await fetch(`/api/kiosk/${eventId}/search`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, query: manualInput.trim() }) });
+        const res = await kioskPost(`/api/kiosk/${eventId}/search`, { query: manualInput.trim() });
         if (!res.ok) { setScanError("Search failed. Please try again."); return; }
         const data = await res.json();
         if (data.found && data.attendee) {
@@ -612,7 +622,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
     if (!verifyEmail.trim() || !pendingSearchQuery || !eventId || !exitPin) return;
     setVerifyError(null);
     try {
-      const res = await fetch(`/api/kiosk/${eventId}/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, query: pendingSearchQuery, email: verifyEmail.trim() }) });
+      const res = await kioskPost(`/api/kiosk/${eventId}/verify`, { query: pendingSearchQuery, email: verifyEmail.trim() });
       if (!res.ok) { setVerifyError("Verification failed. Please try again."); return; }
       const data = await res.json();
       if (data.found && data.attendee) {
@@ -634,7 +644,7 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
     if (walkinForm.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(walkinForm.email.trim())) { setWalkinError("Please enter a valid email address"); return; }
     setWalkinSubmitting(true);
     try {
-      const res = await fetch(`/api/kiosk/${eventId}/walkin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: exitPin, ...walkinForm }) });
+      const res = await kioskPost(`/api/kiosk/${eventId}/walkin`, { ...walkinForm });
       const data = await res.json();
       if (!res.ok) { setWalkinError(data.error || "Registration failed. Please try again."); return; }
       if (data.success && data.attendee) { setLastScanned(data.attendee as Attendee); trackComplete("kiosk", "scan"); setStep("success"); }
@@ -709,16 +719,16 @@ export function KioskProvider({ children, ...props }: KioskModeProps & { childre
       let printResponse: Response;
       if (isZebraPrinter) {
         const zplData = networkPrint.generateBadgeZpl({ firstName: attendeeData.firstName, lastName: attendeeData.lastName, company: attendeeData.company, title: attendeeData.title, externalId: memberData.externalId }, { width: templateConfig.width, height: templateConfig.height, includeQR: templateConfig.includeQR, qrData: memberData.externalId || `${attendeeData.firstName}-${attendeeData.lastName}` });
-        printResponse = await fetch('/api/printnode/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ printerId: selectedPrinter.printNodeId, zplData, title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}` }) });
+        printResponse = await apiRequest('POST', '/api/printnode/print', { printerId: selectedPrinter.printNodeId, zplData, title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}` });
       } else {
         const pnRotation = (template?.labelRotation || 0) as 0 | 90 | 180 | 270;
         const pdfBlob = await printOrchestrator.generatePDFBlob(attendeeData, templateConfig, pnRotation);
         const pdfArrayBuffer = await pdfBlob.arrayBuffer();
         const pdfBase64 = btoa(new Uint8Array(pdfArrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-        printResponse = await fetch('/api/printnode/print', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ printerId: selectedPrinter.printNodeId, pdfBase64, title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}` }) });
+        printResponse = await apiRequest('POST', '/api/printnode/print', { printerId: selectedPrinter.printNodeId, pdfBase64, title: `Badge: ${attendeeData.firstName} ${attendeeData.lastName}` });
       }
       const printResult = await printResponse.json();
-      if (!printResponse.ok || !printResult.success) throw new Error(printResult.error || 'PrintNode print failed');
+      if (!printResult.success) throw new Error(printResult.error || 'PrintNode print failed');
     } else if (selectedPrinter?.type === 'custom' || selectedPrinter?.type === 'local') {
       const ip = selectedPrinter.type === 'custom' ? selectedPrinter.customIp : selectedPrinter.ipAddress;
       const port = selectedPrinter.type === 'custom' ? selectedPrinter.customPort : (selectedPrinter.port || 9100);

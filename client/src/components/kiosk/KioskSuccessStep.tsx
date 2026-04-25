@@ -9,9 +9,9 @@ export function KioskSuccessStep() {
   if (!lastScanned) return null;
 
   return (
-    <div className="text-center space-y-6">
+    <div className="text-center space-y-6" role="status" aria-live="polite">
       <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-green-500/10 mb-2">
-        <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-500" />
+        <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-500" aria-hidden="true" />
       </div>
       <div className="space-y-2">
         <h2 className="text-3xl font-semibold" data-testid="text-kiosk-welcome">
@@ -52,7 +52,7 @@ export function KioskSuccessStep() {
           disabled={templates.length === 0}
           data-testid="button-kiosk-print"
         >
-          <Printer className="h-6 w-6 mr-3" />
+          <Printer className="h-6 w-6 mr-3" aria-hidden="true" />
           {groupCheckedInMembers.length > 1
             ? `Print ${groupCheckedInMembers.length} Badges`
             : "Print My Badge"}

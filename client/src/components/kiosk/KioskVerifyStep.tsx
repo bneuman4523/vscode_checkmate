@@ -19,7 +19,9 @@ export function KioskVerifyStep() {
       </div>
 
       <div className="space-y-3">
+        <label htmlFor="kiosk-verify-email" className="sr-only">Email address</label>
         <Input
+          id="kiosk-verify-email"
           type="email"
           placeholder="Enter your email address..."
           value={verifyEmail}
@@ -27,6 +29,7 @@ export function KioskVerifyStep() {
           onKeyDown={(e) => e.key === "Enter" && handleVerifyEmail()}
           className="h-14 text-lg"
           autoFocus
+          aria-describedby={verifyError ? "verify-error" : undefined}
           data-testid="input-kiosk-verify-email"
         />
         <Button
@@ -41,8 +44,8 @@ export function KioskVerifyStep() {
       </div>
 
       {verifyError && (
-        <div className="flex items-center justify-center gap-2 text-destructive">
-          <XCircle className="h-5 w-5" />
+        <div id="verify-error" role="alert" className="flex items-center justify-center gap-2 text-destructive">
+          <XCircle className="h-5 w-5" aria-hidden="true" />
           <span>{verifyError}</span>
         </div>
       )}

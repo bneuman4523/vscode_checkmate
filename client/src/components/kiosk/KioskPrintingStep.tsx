@@ -5,7 +5,7 @@ export function KioskPrintingStep() {
   const { groupCheckedInMembers, groupPrintIndex } = useKiosk();
 
   return (
-    <div className="text-center space-y-6">
+    <div className="text-center space-y-6" role="status" aria-live="polite">
       <div className="space-y-2">
         <h2 className="text-3xl font-semibold">
           {groupCheckedInMembers.length > 1
@@ -17,7 +17,7 @@ export function KioskPrintingStep() {
         </p>
       </div>
       <div className="flex items-center justify-center">
-        <Printer className="h-24 w-24 text-primary animate-pulse" />
+        <Printer className="h-24 w-24 text-primary animate-pulse" aria-hidden="true" />
       </div>
       {groupCheckedInMembers.length > 1 && groupPrintIndex > 0 ? (
         <p className="text-sm text-muted-foreground">

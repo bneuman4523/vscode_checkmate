@@ -7,9 +7,9 @@ export function KioskErrorStep() {
   const { securityError, onExit, setStep, staffToken, eventId, scopedCustomerId } = useKiosk();
 
   return (
-    <div className="text-center space-y-6">
+    <div className="text-center space-y-6" role="alert">
       <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-destructive/10 mb-2">
-        <XCircle className="h-12 w-12 text-destructive" />
+        <XCircle className="h-12 w-12 text-destructive" aria-hidden="true" />
       </div>
       <div className="space-y-2">
         <h2 className="text-3xl font-semibold text-destructive">
