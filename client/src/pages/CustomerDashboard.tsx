@@ -15,9 +15,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { 
-  CalendarDays, 
-  Users, 
+import {
+  CalendarDays,
+  Users,
   ArrowLeft,
   Plus,
   MoreVertical,
@@ -38,6 +38,7 @@ import {
   ChevronDown,
   LayoutGrid,
   List,
+  Copy,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -50,6 +51,15 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import type { Customer, Event, Attendee, CustomerIntegration } from "@shared/schema";
 import { ApplyConfigurationModal } from "@/components/ApplyConfigurationModal";
 import EventsListView from "@/components/EventsListView";
@@ -67,8 +77,28 @@ export default function CustomerDashboard() {
   const [eventToConfig, setEventToConfig] = useState<Event | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "upcoming">("all");
+  const [duplicateEvent, setDuplicateEvent] = useState<Event | null>(null);
+  const [duplicateName, setDuplicateName] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
+
+  const duplicateMutation = useMutation({
+    mutationFn: async ({ sourceEventId, name }: { sourceEventId: string; name: string }) => {
+      const res = await apiRequest("POST", `/api/events/${sourceEventId}/copy`, { name });
+      return res.json();
+    },
+    onSuccess: (newEvent: Event) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/events`] });
+      setDuplicateEvent(null);
+      setDuplicateName("");
+      toast({ title: "Event duplicated", description: `${newEvent.name} created with all configuration copied.` });
+      setSelectedEvent(newEvent);
+      setLocation(`/customers/${customerId}/events/${newEvent.id}`);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to duplicate event", description: error.message, variant: "destructive" });
+    },
+  });
 
   const { data: viewModePref } = useQuery<{ value: string | null }>({
     queryKey: ["/api/user/preferences/events_view_mode"],
@@ -615,6 +645,14 @@ export default function CustomerDashboard() {
                           Configure Event
                         </DropdownMenuItem>
                       )}
+                      <DropdownMenuItem onClick={(e) => {
+                        e.stopPropagation();
+                        setDuplicateEvent(event);
+                        setDuplicateName(`${event.name} (Copy)`);
+                      }}>
+                        <Copy className="h-4 w-4 mr-2" />
+                        Duplicate Event
+                      </DropdownMenuItem>
                       <DropdownMenuItem>Edit Event</DropdownMenuItem>
                       <DropdownMenuItem className="text-destructive">Delete</DropdownMenuItem>
                     </DropdownMenuContent>
@@ -720,6 +758,39 @@ export default function CustomerDashboard() {
           }}
         />
       )}
+
+      <Dialog open={!!duplicateEvent} onOpenChange={(open) => { if (!open) { setDuplicateEvent(null); setDuplicateName(""); } }}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Duplicate Event</DialogTitle>
+            <DialogDescription>
+              Create a copy of "{duplicateEvent?.name}" with all configuration (workflow, badges, staff settings, notifications). Attendees and sessions will not be copied.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-4">
+            <Label htmlFor="duplicate-name">Event Name</Label>
+            <Input
+              id="duplicate-name"
+              value={duplicateName}
+              onChange={(e) => setDuplicateName(e.target.value)}
+              placeholder="New event name"
+              data-testid="input-duplicate-name"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDuplicateEvent(null); setDuplicateName(""); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => duplicateEvent && duplicateMutation.mutate({ sourceEventId: duplicateEvent.id, name: duplicateName })}
+              disabled={!duplicateName.trim() || duplicateMutation.isPending}
+              data-testid="button-confirm-duplicate"
+            >
+              {duplicateMutation.isPending ? "Duplicating..." : "Duplicate"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

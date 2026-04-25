@@ -6,6 +6,7 @@ interface FeatureFlags {
   penTestMode: boolean;
   kioskWalkinRegistration: boolean;
   groupCheckin: boolean;
+  eventSync: boolean;
 }
 
 export function useFeatureFlags(): FeatureFlags {
@@ -21,5 +22,6 @@ export function useFeatureFlags(): FeatureFlags {
     penTestMode: data?.penTestMode ?? false,
     kioskWalkinRegistration: data?.kioskWalkinRegistration ?? false,
     groupCheckin: data?.groupCheckin ?? false,
+    eventSync: data?.eventSync ?? true,
   };
 }

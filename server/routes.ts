@@ -2062,6 +2062,131 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
 
+  // Copy/duplicate an event with all its configuration
+  app.post("/api/events/:sourceEventId/copy", requireAuth, requireRole(['super_admin', 'partner', 'admin', 'manager']), async (req, res) => {
+    try {
+      const sourceEvent = await storage.getEvent(req.params.sourceEventId);
+      if (!sourceEvent) {
+        return res.status(404).json({ error: "Source event not found" });
+      }
+
+      if (!isSuperAdmin(req.dbUser) && !isPartner(req.dbUser) && req.dbUser?.customerId !== sourceEvent.customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const newName = req.body.name || `${sourceEvent.name} (Copy)`;
+      const newDate = req.body.eventDate ? new Date(req.body.eventDate) : sourceEvent.eventDate;
+
+      // Create the new event with copied settings
+      const newEvent = await storage.createEvent({
+        customerId: sourceEvent.customerId,
+        name: newName,
+        eventDate: newDate,
+        timezone: sourceEvent.timezone,
+        locationId: sourceEvent.locationId,
+        defaultBadgeTemplateId: sourceEvent.defaultBadgeTemplateId,
+        selectedPrinterId: sourceEvent.selectedPrinterId,
+        printerSettings: sourceEvent.printerSettings,
+        badgeSettings: sourceEvent.badgeSettings,
+        tempStaffSettings: sourceEvent.tempStaffSettings,
+        syncSettings: sourceEvent.syncSettings,
+        kioskPin: sourceEvent.kioskPin,
+        configStatus: 'configured',
+        // Reset integration-specific fields
+        integrationId: null,
+        externalEventId: null,
+      });
+
+      // Copy badge template overrides
+      const overrides = await storage.getEventBadgeTemplateOverrides(sourceEvent.id);
+      for (const override of overrides) {
+        await storage.createEventBadgeTemplateOverride({
+          eventId: newEvent.id,
+          participantType: override.participantType,
+          badgeTemplateId: override.badgeTemplateId,
+          priority: override.priority,
+        });
+      }
+
+      // Copy workflow config + steps + questions + disclaimers
+      const workflowConfig = await storage.getEventWorkflowConfig(sourceEvent.id);
+      if (workflowConfig) {
+        const newConfig = await storage.createEventWorkflowConfig({
+          eventId: newEvent.id,
+          enabled: workflowConfig.enabled,
+          enabledForStaff: workflowConfig.enabledForStaff,
+          enabledForKiosk: workflowConfig.enabledForKiosk,
+        });
+
+        const steps = await storage.getEventWorkflowSteps(sourceEvent.id);
+        for (const step of steps) {
+          const newStep = await storage.createEventWorkflowStep({
+            eventId: newEvent.id,
+            stepType: step.stepType,
+            position: step.position,
+            enabled: step.enabled,
+            config: step.config,
+          });
+
+          // Copy buyer questions for this step
+          const questions = await storage.getEventBuyerQuestions(step.id);
+          for (const q of questions) {
+            await storage.createEventBuyerQuestion({
+              eventId: newEvent.id,
+              stepId: newStep.id,
+              questionText: q.questionText,
+              questionType: q.questionType,
+              required: q.required,
+              position: q.position,
+              options: q.options || [],
+              placeholder: q.placeholder,
+            });
+          }
+
+          // Copy disclaimer for this step
+          const disclaimer = await storage.getEventDisclaimer(step.id);
+          if (disclaimer) {
+            await storage.createEventDisclaimer({
+              eventId: newEvent.id,
+              stepId: newStep.id,
+              title: disclaimer.title,
+              disclaimerText: disclaimer.disclaimerText,
+              requireSignature: disclaimer.requireSignature,
+              confirmationText: disclaimer.confirmationText,
+            });
+          }
+        }
+      }
+
+      // Copy notification rules
+      const notificationRules = await storage.getEventNotificationRules(sourceEvent.id);
+      for (const rule of notificationRules) {
+        await storage.createEventNotificationRule({
+          customerId: sourceEvent.customerId,
+          eventId: newEvent.id,
+          triggerEvent: rule.triggerEvent,
+          participantTypeFilter: rule.participantTypeFilter,
+          nameFilter: rule.nameFilter,
+          webhookEnabled: rule.webhookEnabled,
+          webhookUrl: rule.webhookUrl,
+          webhookMethod: rule.webhookMethod,
+          webhookHeaders: rule.webhookHeaders,
+          customPayload: rule.customPayload,
+          smsEnabled: rule.smsEnabled,
+          smsRecipients: rule.smsRecipients,
+          emailEnabled: rule.emailEnabled,
+          emailRecipients: rule.emailRecipients,
+        });
+      }
+
+      logger.info({ sourceEventId: sourceEvent.id, newEventId: newEvent.id }, "Event copied successfully");
+      res.status(201).json(newEvent);
+    } catch (error) {
+      logger.error({ err: error }, "Error copying event");
+      res.status(500).json({ error: "Failed to copy event" });
+    }
+  });
+
   // Kiosk Public Endpoints — extracted to routes/kiosk.ts
 
 
@@ -5437,12 +5562,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const betaFeedbackSetting = await storage.getSystemSetting("feature_beta_feedback");
       const kioskWalkinFlag = await storage.getFeatureFlagByKey("kiosk_walkin_registration");
       const groupCheckinFlag = await storage.getFeatureFlagByKey("group_checkin");
+      const eventSyncFlag = await storage.getFeatureFlagByKey("event_sync");
       res.json({
         badgeFlipPreview: badgeFlipSetting?.value === "true",
         betaFeedback: betaFeedbackSetting?.value === "true",
         penTestMode: process.env.PEN_TEST_MODE === "true",
         kioskWalkinRegistration: kioskWalkinFlag?.enabled ?? false,
         groupCheckin: groupCheckinFlag?.enabled ?? false,
+        eventSync: eventSyncFlag?.enabled ?? true, // Default ON to preserve existing behavior
       });
     } catch (error) {
       logger.error({ err: error }, "Error fetching feature flags");

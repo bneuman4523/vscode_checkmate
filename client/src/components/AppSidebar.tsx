@@ -55,6 +55,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -70,6 +71,7 @@ export function AppSidebar() {
   const isSuperAdmin = user?.role === "super_admin";
   const isPartnerUser = user?.role === "partner";
   const isMultiAccount = isSuperAdmin || isPartnerUser;
+  const { eventSync } = useFeatureFlags();
 
   const isInEventContext = selectedEvent !== null && isInCustomerScope && location.includes("/events/");
 
@@ -114,17 +116,22 @@ export function AppSidebar() {
   const getEventMenuItems = () => {
     if (!selectedCustomer || !selectedEvent) return [];
     const basePath = `/customers/${selectedCustomer.id}/events/${selectedEvent.id}`;
-    return [
+    const items = [
       { title: "Overview", url: basePath, icon: LayoutDashboard },
       { title: "Attendees", url: `${basePath}/attendees`, icon: Users },
       { title: "Sessions", url: `${basePath}/sessions`, icon: Layers },
       { title: "Check-in", url: `${basePath}/scanner`, icon: QrCode },
       { title: "Badges", url: `${basePath}/badges`, icon: Printer },
       { title: "Reports", url: `${basePath}/reports`, icon: BarChart3 },
-      { title: "Data Sync", url: `${basePath}/data-sync`, icon: RefreshCw },
+    ];
+    if (eventSync) {
+      items.push({ title: "Data Sync", url: `${basePath}/data-sync`, icon: RefreshCw });
+    }
+    items.push(
       { title: "Kiosk Mode", url: `/kiosk/${selectedCustomer.id}/${selectedEvent.id}`, icon: Monitor },
       { title: "Settings", url: `${basePath}/settings`, icon: Settings },
-    ];
+    );
+    return items;
   };
 
   const getCustomerMenuItems = () => {
@@ -132,7 +139,7 @@ export function AppSidebar() {
     const items = [
       { title: "Dashboard & Events", url: `/customers/${selectedCustomer.id}`, icon: LayoutDashboard },
     ];
-    if (user?.role !== "staff") {
+    if (user?.role !== "staff" && eventSync) {
       items.push({ title: "Integrations", url: `/customers/${selectedCustomer.id}/integrations`, icon: Link2 });
     }
     items.push(
@@ -156,13 +163,17 @@ export function AppSidebar() {
       const items = [
         { title: "Feedback", url: "/feedback", icon: MessageSquare },
         { title: "License & Features", url: `/customers/${selectedCustomer.id}/license`, icon: Crown },
-        { title: "Sync Insights", url: `/customers/${selectedCustomer.id}/sync-insights`, icon: Activity },
+      ];
+      if (eventSync) {
+        items.push({ title: "Sync Insights", url: `/customers/${selectedCustomer.id}/sync-insights`, icon: Activity });
+      }
+      items.push(
         { title: "Badge Templates", url: `/customers/${selectedCustomer.id}/badge-templates`, icon: Palette },
         { title: "Locations", url: `/customers/${selectedCustomer.id}/locations`, icon: MapPin },
         { title: "Printer Settings", url: `/customers/${selectedCustomer.id}/printer-settings`, icon: Settings },
         { title: "User Management", url: `/customers/${selectedCustomer.id}/users`, icon: UserCircle },
         { title: "Data Retention", url: `/customers/${selectedCustomer.id}/data-retention`, icon: Shield },
-      ];
+      );
       return items;
     }
     if (user?.role === "admin") {
