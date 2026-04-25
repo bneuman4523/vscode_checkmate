@@ -2803,7 +2803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } : null;
       
       // Capture selected statuses from the source event
-      const eventSelectedStatuses = (event.syncSettings as any)?.selectedStatuses || null;
+      const eventSelectedStatuses = (event.syncSettings)?.selectedStatuses || null;
 
       const template = await storage.createEventConfigurationTemplate({
         customerId: event.customerId,
@@ -2934,7 +2934,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultEndTime.setDate(defaultEndTime.getDate() + 1);
         defaultEndTime.setHours(23, 59, 59, 999);
         
-        const manualStatusesOk = !!(event.syncSettings as any)?.statusesConfigured;
+        const manualStatusesOk = !!(event.syncSettings)?.statusesConfigured;
         await storage.updateEvent(eventId, {
           configStatus: manualStatusesOk ? 'configured' : 'unconfigured',
           tempStaffSettings: {
@@ -3138,7 +3138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Apply selected statuses from template/source if available
       if (config.selectedStatuses && config.selectedStatuses.length > 0) {
-        const currentSyncSettings = (event.syncSettings as any) || {};
+        const currentSyncSettings = (event.syncSettings) || {};
         await storage.updateEvent(eventId, {
           syncSettings: {
             ...currentSyncSettings,
@@ -4558,7 +4558,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Resolve revert status: event override → integration config → default
-      const eventSyncSettings = event.syncSettings as any;
+      const eventSyncSettings = event.syncSettings;
       let revertStatus = 'Registered';
       let integration: any = null;
       if (event.integrationId) {
@@ -5681,7 +5681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eventDate: event.eventDate,
             totalAttendees: attendees.length,
             billableAttendees: billable.length,
-            statusesConfigured: !!(event.syncSettings as any)?.statusesConfigured,
+            statusesConfigured: !!(event.syncSettings)?.statusesConfigured,
           });
         }
       }

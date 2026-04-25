@@ -24,7 +24,7 @@ export function registerKioskRoutes(app: Express): void {
       if (!customer) {
         return res.status(404).json({ error: "Customer not found" });
       }
-      const hasPin = !!(event.tempStaffSettings as any)?.kioskPin;
+      const hasPin = !!(event.tempStaffSettings)?.kioskPin;
       // Resolve branding: event override if enabled, otherwise account default
       const eventBranding = (event.kioskBrandingOverride as any)?.enabled ? event.kioskBrandingOverride : null;
       const branding = eventBranding || customer.kioskBranding || null;

@@ -31,7 +31,7 @@ export function registerTempStaffRoutes(app: Express): void {
         return res.status(403).json({ error: "Not authorized" });
       }
 
-      const syncSettings = (event.syncSettings as any) || {};
+      const syncSettings = (event.syncSettings) || {};
       let accountRealtimeEnabled = false;
       let accountSessionRealtimeEnabled = false;
       let accountSyncIntervalMinutes = 60;
@@ -92,7 +92,7 @@ export function registerTempStaffRoutes(app: Express): void {
         }
       }
 
-      const existing = (event.syncSettings as any) || {};
+      const existing = (event.syncSettings) || {};
 
       const updated: any = { ...existing };
       if (realtimeSyncEnabled !== undefined) {
@@ -183,7 +183,7 @@ export function registerTempStaffRoutes(app: Express): void {
         .map(([label, count]) => ({ label, count }))
         .sort((a, b) => b.count - a.count);
 
-      const syncSettings = (event.syncSettings as any) || {};
+      const syncSettings = (event.syncSettings) || {};
       res.json({
         statuses,
         selectedStatuses: syncSettings.selectedStatuses || null,
@@ -211,7 +211,7 @@ export function registerTempStaffRoutes(app: Express): void {
         return res.status(400).json({ error: "selectedStatuses must be a non-empty array of strings" });
       }
 
-      const existing = (event.syncSettings as any) || {};
+      const existing = (event.syncSettings) || {};
       const previouslySelected: string[] = existing.selectedStatuses || [];
 
       // Add-only enforcement: non-super_admin cannot remove previously selected statuses
@@ -563,7 +563,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get temp staff session info (validates token is still valid)
-  app.get("/api/staff/session", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/session", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -599,7 +599,7 @@ export function registerTempStaffRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/staff/feedback", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/feedback", staffAuth, async (req: StaffRequest, res) => {
     try {
       const { db } = await import("./db");
       const { feedbackEntries } = await import("@shared/schema");
@@ -707,7 +707,7 @@ export function registerTempStaffRoutes(app: Express): void {
 
   // Get printers available for temp staff (from account-level configuration)
   // Filters by event's locationId if assigned, otherwise returns all customer printers
-  app.get("/api/staff/printers", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/printers", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       let printers = await storage.getPrinters(event.customerId);
@@ -737,7 +737,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get PrintNode printers (for temp staff)
-  app.get("/api/staff/printnode/printers", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/printnode/printers", staffAuth, async (req: StaffRequest, res) => {
     try {
       if (!printNodeService.isConfigured()) {
         return res.json({ 
@@ -765,7 +765,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Test PrintNode connection
-  app.get("/api/staff/printnode/status", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/printnode/status", staffAuth, async (req: StaffRequest, res) => {
     try {
       const result = await printNodeService.testConnection();
       res.json(result);
@@ -775,7 +775,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Print badge via PrintNode
-  app.post("/api/staff/printnode/print", largeBodyParser, staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/printnode/print", largeBodyParser, staffAuth, async (req: StaffRequest, res) => {
     try {
       const { printerId, pdfBase64, zplData, title, badgeWidth, badgeHeight } = req.body;
 
@@ -805,7 +805,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Test print - sends a simple test label to verify printer connection
-  app.post("/api/staff/printnode/test-print", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/printnode/test-print", staffAuth, async (req: StaffRequest, res) => {
     try {
       const { printerId } = req.body;
 
@@ -837,7 +837,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff logout
-  app.post("/api/staff/logout", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/logout", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
 
@@ -858,7 +858,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get attendees for temp staff event
-  app.get("/api/staff/attendees", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/attendees", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const attendees = await storage.getAttendees(event.id);
@@ -887,7 +887,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Staff group lookup by order code
-  app.get("/api/staff/group/:orderCode", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/group/:orderCode", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const allAttendees = await storage.getAttendees(event.id);
@@ -920,7 +920,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Staff batch group check-in
-  app.post("/api/staff/group-checkin", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/group-checkin", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const { attendeeIds, checkedInBy } = req.body;
@@ -974,7 +974,7 @@ export function registerTempStaffRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/staff/attendees", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/attendees", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1070,7 +1070,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get sessions for temp staff event
-  app.get("/api/staff/sessions", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/sessions", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const settings = event.tempStaffSettings!;
@@ -1111,7 +1111,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get session registrations with attendee details for temp staff
-  app.get("/api/staff/sessions/:sessionId/registrations", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/sessions/:sessionId/registrations", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const { sessionId } = req.params;
@@ -1169,7 +1169,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff event-level check-in
-  app.post("/api/staff/checkin", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/checkin", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1349,7 +1349,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff mark badge as printed
-  app.post("/api/staff/badge-printed", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/badge-printed", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1404,7 +1404,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff revert check-in
-  app.post("/api/staff/revert-checkin", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/revert-checkin", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1487,7 +1487,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff network print to Zebra printer via IP:9100 (for iOS/mobile support)
-  app.post("/api/staff/network-print", largeBodyParser, staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/network-print", largeBodyParser, staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1572,7 +1572,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff test printer connection
-  app.post("/api/staff/test-printer", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/test-printer", staffAuth, async (req: StaffRequest, res) => {
     try {
       const { printerIp, port = 9100 } = req.body;
 
@@ -1624,7 +1624,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff update attendee badge data
-  app.patch("/api/staff/attendees/:attendeeId", staffAuth as any, async (req: StaffRequest, res) => {
+  app.patch("/api/staff/attendees/:attendeeId", staffAuth, async (req: StaffRequest, res) => {
     try {
       const session = req.staffSession!;
       const event = req.staffEvent!;
@@ -1673,7 +1673,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Temp staff session check-in
-  app.post("/api/staff/sessions/:sessionId/checkin", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/sessions/:sessionId/checkin", staffAuth, async (req: StaffRequest, res) => {
     try {
       const staffSession = req.staffSession!;
       const event = req.staffEvent!;
@@ -1774,7 +1774,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Staff session check-out endpoint
-  app.post("/api/staff/sessions/:sessionId/checkout", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/sessions/:sessionId/checkout", staffAuth, async (req: StaffRequest, res) => {
     try {
       const staffSession = req.staffSession!;
       const event = req.staffEvent!;
@@ -1920,7 +1920,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Get badge templates for temp staff (for badge printing)
-  app.get("/api/staff/badge-templates", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/badge-templates", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const settings = event.tempStaffSettings!;
@@ -1953,7 +1953,7 @@ export function registerTempStaffRoutes(app: Express): void {
   });
 
   // Resolve badge template for a specific attendee based on participant type
-  app.get("/api/staff/attendees/:attendeeId/resolve-template", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/attendees/:attendeeId/resolve-template", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const { attendeeId } = req.params;

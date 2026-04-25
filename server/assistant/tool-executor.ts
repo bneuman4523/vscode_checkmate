@@ -242,7 +242,7 @@ export async function executeTool(
         }
 
         const event = await storage.getEvent(eventId);
-        const syncSettings = (event?.syncSettings as any) ?? {};
+        const syncSettings = (event?.syncSettings) ?? {};
         const selectedStatuses: string[] | null = syncSettings.selectedStatuses ?? null;
         const statusesConfigured: boolean = !!syncSettings.statusesConfigured;
 
@@ -263,7 +263,7 @@ export async function executeTool(
         }
 
         const event = await storage.getEvent(eventId);
-        const existing = (event?.syncSettings as any) ?? {};
+        const existing = (event?.syncSettings) ?? {};
         const updated = {
           ...existing,
           selectedStatuses: statuses,

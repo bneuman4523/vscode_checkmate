@@ -137,7 +137,7 @@ class CheckinSyncService {
     checkedInBy?: string
   ): Promise<SyncResult> {
     if (!this.isRealtimeSyncEnabled(event, integration)) {
-      const reason = (event.syncSettings as any)?.realtimeSyncEnabled === false
+      const reason = (event.syncSettings)?.realtimeSyncEnabled === false
         ? `event ${event.id} has realtime sync disabled`
         : `integration ${integration.id}`;
       logger.info(`Realtime sync not enabled for ${reason}`);
@@ -145,7 +145,7 @@ class CheckinSyncService {
     }
 
     const config = integration.realtimeSyncConfig as RealtimeSyncConfig;
-    const eventSyncSettings = event.syncSettings as any;
+    const eventSyncSettings = event.syncSettings;
 
     if (!attendee.externalId && config.walkinEndpointUrl) {
       logger.info(`Attendee ${attendee.id} has no externalId — routing to walk-in registration sync`);
@@ -196,7 +196,7 @@ class CheckinSyncService {
     const checkinDate = attendee.checkedInAt
       ? new Date(attendee.checkedInAt).toISOString().replace('Z', '').split('.')[0]
       : now;
-    const eventSyncSettings = event.syncSettings as any;
+    const eventSyncSettings = event.syncSettings;
     // Event override → integration config → default
     const walkinSource = eventSyncSettings?.walkinSource || config.walkinSource || "Greet";
     const walkinStatus = eventSyncSettings?.walkinStatus || config.walkinStatus || config.checkinStatus || "Checked In";
@@ -261,7 +261,7 @@ class CheckinSyncService {
     revertedBy?: string
   ): Promise<SyncResult> {
     if (!this.isRealtimeSyncEnabled(event, integration)) {
-      const reason = (event.syncSettings as any)?.realtimeSyncEnabled === false
+      const reason = (event.syncSettings)?.realtimeSyncEnabled === false
         ? `event ${event.id} has realtime sync disabled`
         : `integration ${integration.id}`;
       logger.info(`Realtime sync not enabled for ${reason}`);
@@ -269,7 +269,7 @@ class CheckinSyncService {
     }
 
     const config = integration.realtimeSyncConfig as RealtimeSyncConfig;
-    const eventSyncSettings = event.syncSettings as any;
+    const eventSyncSettings = event.syncSettings;
     // Event override → integration config → default
     const revertStatus = eventSyncSettings?.revertStatus || config.revertStatus || "Registered";
     const payload = this.buildCertainPayload(revertStatus);

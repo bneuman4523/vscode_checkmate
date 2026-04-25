@@ -561,7 +561,7 @@ export function registerWorkflowRoutes(app: Express): void {
   // =====================
 
   // Get workflow for temp staff (read-only)
-  app.get("/api/staff/workflow", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/workflow", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       
@@ -585,7 +585,7 @@ export function registerWorkflowRoutes(app: Express): void {
   });
 
   // Save workflow responses (temp staff)
-  app.post("/api/staff/attendees/:attendeeId/workflow-responses", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/attendees/:attendeeId/workflow-responses", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const session = req.staffSession!;
@@ -633,7 +633,7 @@ export function registerWorkflowRoutes(app: Express): void {
   });
 
   // Save signature (temp staff)
-  app.get("/api/staff/attendees/:attendeeId/signatures", staffAuth as any, async (req: StaffRequest, res) => {
+  app.get("/api/staff/attendees/:attendeeId/signatures", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
 
@@ -650,7 +650,7 @@ export function registerWorkflowRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/staff/attendees/:attendeeId/signatures", staffAuth as any, async (req: StaffRequest, res) => {
+  app.post("/api/staff/attendees/:attendeeId/signatures", staffAuth, async (req: StaffRequest, res) => {
     try {
       const event = req.staffEvent!;
       const session = req.staffSession!;

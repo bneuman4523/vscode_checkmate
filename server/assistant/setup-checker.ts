@@ -50,8 +50,8 @@ export async function checkEventSetup(
   const customerPath = `/customers/${customerId}`;
   const items: SetupItem[] = [];
 
-  const staffEnabled = !!(event?.tempStaffSettings as any)?.enabled;
-  const kioskFromStaff = !!(event?.tempStaffSettings as any)?.allowKioskFromStaff;
+  const staffEnabled = !!(event?.tempStaffSettings)?.enabled;
+  const kioskFromStaff = !!(event?.tempStaffSettings)?.allowKioskFromStaff;
   const kioskEnabled = kioskFromStaff;
 
   items.push({
@@ -80,7 +80,7 @@ export async function checkEventSetup(
 
   const hasIntegration = (integrations ?? []).some((i) => i.status === "connected");
   if (hasIntegration || attendeeCount > 0) {
-    const statusesConfigured = !!(event?.syncSettings as any)?.statusesConfigured;
+    const statusesConfigured = !!(event?.syncSettings)?.statusesConfigured;
     items.push({
       id: "attendee_statuses",
       label: "Attendee statuses selected",

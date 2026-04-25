@@ -146,7 +146,7 @@ export interface StaffRequest extends Request {
   staffEvent?: Event;
 }
 
-export async function staffAuth(req: StaffRequest, res: Response, next: NextFunction) {
+export async function staffAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: "Missing or invalid authorization header" });
@@ -192,8 +192,8 @@ export async function staffAuth(req: StaffRequest, res: Response, next: NextFunc
     }
   }
 
-  req.staffSession = session;
-  req.staffEvent = event;
+  (req as StaffRequest).staffSession = session;
+  (req as StaffRequest).staffEvent = event;
   next();
 }
 
