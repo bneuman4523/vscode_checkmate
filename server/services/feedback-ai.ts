@@ -1,14 +1,10 @@
-import { GoogleGenAI } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: {
-    apiVersion: "",
-    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-  },
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "claude-sonnet-4-20250514";
 
 export interface FeedbackInsights {
   themes: Array<{ theme: string; count: number; description: string }>;
@@ -45,6 +41,27 @@ export function redactPII(text: string): string {
   redacted = redacted.replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[SSN]");
   redacted = redacted.replace(/\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g, "[CARD]");
   return redacted;
+}
+
+async function generateJSON(prompt: string, temperature: number = 0.3): Promise<string> {
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    temperature,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const textBlock = response.content.find(b => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") {
+    throw new Error("No response from AI model");
+  }
+
+  // Strip markdown code fences if present
+  let text = textBlock.text.trim();
+  if (text.startsWith("```")) {
+    text = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+  }
+  return text;
 }
 
 export async function analyzeFeedback(
@@ -89,20 +106,7 @@ ${feedbackSummary.length === 0 && usageSummary.length === 0 ? "NOTE: No data is 
 
 Return ONLY valid JSON matching the schema described above. No markdown formatting, no code blocks.`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: prompt,
-    config: {
-      temperature: 0.3,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const content = response.text;
-  if (!content) {
-    throw new Error("No response from AI model");
-  }
-
+  const content = await generateJSON(prompt, 0.3);
   const parsed = JSON.parse(content);
 
   return {
@@ -172,20 +176,7 @@ Return ONLY valid JSON with these fields:
 - isFinal: boolean (true when ready to submit)
 - summary: string | null (combined user feedback text, only when isFinal=true)`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: prompt,
-    config: {
-      temperature: 0.4,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const content = response.text;
-  if (!content) {
-    throw new Error("No response from AI model");
-  }
-
+  const content = await generateJSON(prompt, 0.4);
   const parsed = JSON.parse(content);
 
   return {
@@ -235,19 +226,6 @@ Context about Greet: It's an event registration and check-in system with badge p
 
 Return ONLY valid JSON matching the schema. No markdown, no code blocks.`;
 
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: prompt,
-    config: {
-      temperature: 0.2,
-      responseMimeType: "application/json",
-    },
-  });
-
-  const content = response.text;
-  if (!content) {
-    throw new Error("No response from AI model");
-  }
-
+  const content = await generateJSON(prompt, 0.2);
   return JSON.parse(content);
 }

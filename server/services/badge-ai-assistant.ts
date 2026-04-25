@@ -1,18 +1,14 @@
 import { createChildLogger } from '../logger';
-import { GoogleGenAI } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 import type { BadgeTemplate, Event, Attendee } from "@shared/schema";
 
 const logger = createChildLogger('BadgeAI');
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-  httpOptions: {
-    apiVersion: "",
-    baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-  },
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "claude-sonnet-4-20250514";
 
 export interface BadgeContext {
   template?: BadgeTemplate | null;
@@ -65,19 +61,27 @@ export async function getBadgeAssistance(
 ): Promise<AIResponse> {
   try {
     const contextDescription = buildContextDescription(context);
-    
-    const response = await ai.models.generateContent({
+
+    const response = await client.messages.create({
       model: MODEL,
-      contents: `${SYSTEM_PROMPT}\n\nCurrent context:\n${contextDescription}\n\nUser question: ${userMessage}`,
-      config: {
-        responseMimeType: "application/json",
-        maxOutputTokens: 1024,
-      },
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{
+        role: "user",
+        content: `Current context:\n${contextDescription}\n\nUser question: ${userMessage}`,
+      }],
     });
 
-    const content = response.text || "{}";
+    const textBlock = response.content.find(b => b.type === "text");
+    let content = textBlock?.type === "text" ? textBlock.text.trim() : "{}";
+
+    // Strip markdown code fences if present
+    if (content.startsWith("```")) {
+      content = content.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+    }
+
     const parsed = JSON.parse(content) as AIResponse;
-    
+
     return {
       message: parsed.message || "I'm sorry, I couldn't process that request.",
       suggestions: parsed.suggestions || [],
@@ -108,7 +112,7 @@ function buildContextDescription(context: BadgeContext): string {
     parts.push(`  - Text Color: ${context.template.textColor}`);
     parts.push(`  - QR Code: ${context.template.includeQR ? `Yes (${context.template.qrPosition})` : "No"}`);
     if (context.template.mergeFields && Array.isArray(context.template.mergeFields)) {
-      const fields = context.template.mergeFields.map((f: any) => 
+      const fields = context.template.mergeFields.map((f: any) =>
         `${f.field} (${f.fontSize || "default"}pt at ${f.position?.x || 0},${f.position?.y || 0})`
       ).join(", ");
       parts.push(`  - Fields: ${fields}`);
@@ -160,9 +164,9 @@ Please help determine if this is:
 
 And provide specific steps to resolve it.`;
 
-  return getBadgeAssistance(prompt, { 
-    template, 
-    attendee, 
-    lastPrintError: errorMessage 
+  return getBadgeAssistance(prompt, {
+    template,
+    attendee,
+    lastPrintError: errorMessage
   });
 }
