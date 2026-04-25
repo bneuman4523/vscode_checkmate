@@ -37,6 +37,7 @@ import {
   hashPasscode,
   updateUserSchema,
   penTestMode,
+  startRateLimiterCleanup,
 } from "./routes/shared";
 
 const logger = createChildLogger('Routes');
@@ -175,6 +176,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const otpRateLimits = new Map<string, { count: number; resetAt: number }>();
   const OTP_RATE_LIMIT = penTestMode ? 500 : 5; // max requests per window
   const OTP_RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
+  startRateLimiterCleanup(otpRateLimits, (entry, now) => now > entry.resetAt);
 
 
   // Request OTP code for login (SMS primary, email backup)
@@ -280,6 +282,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const otpVerifyAttempts = new Map<string, { count: number; resetAt: number }>();
   const OTP_VERIFY_LIMIT = 5; // max failed attempts before lockout
   const OTP_VERIFY_WINDOW = 15 * 60 * 1000; // 15 minute lockout
+  startRateLimiterCleanup(otpVerifyAttempts, (entry, now) => now > entry.resetAt);
 
   // Verify OTP code and login
   app.post("/api/auth/verify-otp", async (req, res) => {
@@ -662,6 +665,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const errorLogLimits = new Map<string, { count: number; resetAt: number }>();
   const ERROR_LOG_RATE_LIMIT = 30;
   const ERROR_LOG_RATE_WINDOW = 60 * 1000;
+  startRateLimiterCleanup(errorLogLimits, (entry, now) => now > entry.resetAt);
 
   // Log an error (internal use - for client-side error logging)
   app.post("/api/errors/log", async (req, res) => {
@@ -1793,11 +1797,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         customerIds: z.array(z.string()),
       }).parse(req.body);
 
-      // Validate all customer IDs exist
-      for (const cid of customerIds) {
-        const customer = await storage.getCustomer(cid);
-        if (!customer) {
-          return res.status(400).json({ error: `Customer ${cid} not found` });
+      // Validate all customer IDs exist (batch query, not N+1)
+      if (customerIds.length > 0) {
+        const allCustomers = await storage.getCustomers();
+        const existingIds = new Set(allCustomers.map(c => c.id));
+        const missing = customerIds.filter(id => !existingIds.has(id));
+        if (missing.length > 0) {
+          return res.status(400).json({ error: `Customer(s) not found: ${missing.join(", ")}` });
         }
       }
 
@@ -2074,8 +2080,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const newName = req.body.name || `${sourceEvent.name} (Copy)`;
-      const newDate = req.body.eventDate ? new Date(req.body.eventDate) : sourceEvent.eventDate;
+      const copyInput = z.object({
+        name: z.string().min(1).max(500).optional(),
+        eventDate: z.string().datetime().optional(),
+      }).parse(req.body);
+
+      const newName = copyInput.name || `${sourceEvent.name} (Copy)`;
+      const newDate = copyInput.eventDate ? new Date(copyInput.eventDate) : sourceEvent.eventDate;
 
       // Create the new event with copied settings
       const newEvent = await storage.createEvent({

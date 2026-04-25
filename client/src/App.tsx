@@ -59,6 +59,54 @@ function LoadingFallback() {
     </div>
   );
 }
+
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("Page crash caught by ErrorBoundary:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex h-screen w-full items-center justify-center">
+          <div className="text-center space-y-4 max-w-md px-4">
+            <h2 className="text-xl font-semibold">Something went wrong</h2>
+            <p className="text-muted-foreground text-sm">
+              {this.state.error?.message || "An unexpected error occurred."}
+            </p>
+            <div className="flex gap-2 justify-center">
+              <button
+                onClick={() => this.setState({ hasError: false, error: null })}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm hover:bg-primary/90"
+              >
+                Try Again
+              </button>
+              <button
+                onClick={() => window.location.replace("/")}
+                className="px-4 py-2 bg-secondary text-secondary-foreground rounded-md text-sm hover:bg-secondary/90"
+              >
+                Go to Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { Button } from "@/components/ui/button";
 import { Building2, LogIn, LogOut, User, Menu, MoreVertical } from "lucide-react";
 import { useLocation } from "wouter";
@@ -81,6 +129,7 @@ import {
 
 function Router() {
   return (
+    <ErrorBoundary>
     <Suspense fallback={<LoadingFallback />}>
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -125,6 +174,7 @@ function Router() {
       <Route component={NotFound} />
     </Switch>
     </Suspense>
+    </ErrorBoundary>
   );
 }
 

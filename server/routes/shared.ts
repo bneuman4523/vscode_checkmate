@@ -9,6 +9,31 @@ const logger = createChildLogger('RouteUtils');
 
 export const penTestMode = process.env.PEN_TEST_MODE === "true";
 
+/**
+ * Periodically sweep expired entries from rate limiter Maps to prevent memory leaks.
+ * Call once per Map at module init. Runs every 15 minutes.
+ */
+export function startRateLimiterCleanup<T extends Record<string, any>>(
+  map: Map<string, T>,
+  isExpired: (entry: T, now: number) => boolean,
+  intervalMs: number = 15 * 60 * 1000,
+): void {
+  const sweep = () => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [key, entry] of map) {
+      if (isExpired(entry, now)) {
+        map.delete(key);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      logger.debug({ cleaned, remaining: map.size }, "Rate limiter cleanup sweep");
+    }
+  };
+  setInterval(sweep, intervalMs).unref();
+}
+
 export function sanitizeHtml(input: string): string {
   return input
     .replace(/&/g, '&amp;')
@@ -188,6 +213,11 @@ const kioskPinAttempts = new Map<string, { count: number; firstAttempt: number; 
 const KIOSK_PIN_MAX_ATTEMPTS = penTestMode ? 500 : 5;
 const KIOSK_PIN_WINDOW_MS = 15 * 60 * 1000;
 const KIOSK_PIN_LOCKOUT_MS = 30 * 60 * 1000;
+
+startRateLimiterCleanup(kioskPinAttempts, (entry, now) => {
+  if (entry.lockedUntil && now > entry.lockedUntil) return true;
+  return now - entry.firstAttempt > KIOSK_PIN_WINDOW_MS;
+});
 
 export function checkKioskPinRateLimit(eventId: string, ip: string): { allowed: boolean; retryAfterMs?: number } {
   const key = `${eventId}:${ip}`;

@@ -13,6 +13,7 @@ import {
   generateSessionToken,
   staffAuth,
   penTestMode,
+  startRateLimiterCleanup,
   type StaffRequest,
 } from "./shared";
 
@@ -413,6 +414,10 @@ export function registerTempStaffRoutes(app: Express): void {
   const STAFF_LOGIN_MAX_ATTEMPTS = penTestMode ? 500 : 5;
   const STAFF_LOGIN_WINDOW_MS = 15 * 60 * 1000;
   const STAFF_LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+  startRateLimiterCleanup(staffLoginAttempts, (entry, now) => {
+    if (entry.lockedUntil && now > entry.lockedUntil) return true;
+    return now - entry.firstAttempt > STAFF_LOGIN_WINDOW_MS;
+  });
 
   // Temp staff login (public - no auth required)
   app.post("/api/staff/events/:eventId/login", async (req, res) => {

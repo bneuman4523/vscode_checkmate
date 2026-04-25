@@ -93,8 +93,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     next();
   } catch (error) {
-    logger.error({ err: error }, "Auth middleware error");
-    next();
+    logger.error({ err: error }, "Auth middleware error — blocking request (fail closed)");
+    res.status(500).json({ error: "Authentication service unavailable" });
   }
 }
 
