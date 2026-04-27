@@ -155,12 +155,12 @@ export function BadgePrintPreviewDialog({
                   includeQR={template?.includeQR ?? true}
                   qrEmbedType={(template?.qrCodeConfig as any)?.embedType}
                   participantTypes={template?.participantTypes as string[] | undefined}
-                  layoutMode={(template as any)?.layoutMode || 'single'}
+                  layoutMode={template?.layoutMode || 'single'}
                 />
               </div>
 
               <div className="flex justify-center p-4 bg-muted/50 rounded-lg">
-                {(template as any)?.layoutMode === 'foldable' ? (
+                {template?.layoutMode === 'foldable' ? (
                   <FlippableBadge
                     front={
                       <div className="border-2 border-border rounded-lg overflow-hidden shadow-lg">
@@ -172,7 +172,7 @@ export function BadgePrintPreviewDialog({
                           title={attendee.title || undefined}
                           participantType={attendee.participantType || "General"}
                           externalId={attendee.externalId || undefined}
-                          orderCode={(attendee as any).orderCode || undefined}
+                          orderCode={attendee.orderCode || undefined}
                           customFields={attendee.customFields as Record<string, string> | undefined}
                           templateConfig={getPreviewTemplateConfig(template) as any}
                           renderSide="front"
@@ -191,7 +191,7 @@ export function BadgePrintPreviewDialog({
                           title={attendee.title || undefined}
                           participantType={attendee.participantType || "General"}
                           externalId={attendee.externalId || undefined}
-                          orderCode={(attendee as any).orderCode || undefined}
+                          orderCode={attendee.orderCode || undefined}
                           customFields={attendee.customFields as Record<string, string> | undefined}
                           templateConfig={getPreviewTemplateConfig(template) as any}
                           renderSide="back"
@@ -211,7 +211,7 @@ export function BadgePrintPreviewDialog({
                       title={attendee.title || undefined}
                       participantType={attendee.participantType || "General"}
                       externalId={attendee.externalId || undefined}
-                      orderCode={(attendee as any).orderCode || undefined}
+                      orderCode={attendee.orderCode || undefined}
                       customFields={attendee.customFields as Record<string, string> | undefined}
                       templateConfig={getPreviewTemplateConfig(template)}
                       scale={0.6}

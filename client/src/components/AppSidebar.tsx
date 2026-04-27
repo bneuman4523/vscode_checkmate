@@ -28,6 +28,8 @@ import {
   BookOpen,
   Shield,
   Crown,
+  Activity,
+  Stethoscope,
 } from "lucide-react";
 import {
   Sidebar,
@@ -53,6 +55,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useNavigation } from "@/contexts/NavigationContext";
 import { useAuth } from "@/hooks/useAuth";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -66,6 +69,9 @@ export function AppSidebar() {
   const [contextMenuEventId, setContextMenuEventId] = useState<string | null>(null);
   
   const isSuperAdmin = user?.role === "super_admin";
+  const isPartnerUser = user?.role === "partner";
+  const isMultiAccount = isSuperAdmin || isPartnerUser;
+  const { eventSync } = useFeatureFlags();
 
   const isInEventContext = selectedEvent !== null && isInCustomerScope && location.includes("/events/");
 
@@ -110,17 +116,22 @@ export function AppSidebar() {
   const getEventMenuItems = () => {
     if (!selectedCustomer || !selectedEvent) return [];
     const basePath = `/customers/${selectedCustomer.id}/events/${selectedEvent.id}`;
-    return [
+    const items = [
       { title: "Overview", url: basePath, icon: LayoutDashboard },
       { title: "Attendees", url: `${basePath}/attendees`, icon: Users },
       { title: "Sessions", url: `${basePath}/sessions`, icon: Layers },
       { title: "Check-in", url: `${basePath}/scanner`, icon: QrCode },
       { title: "Badges", url: `${basePath}/badges`, icon: Printer },
       { title: "Reports", url: `${basePath}/reports`, icon: BarChart3 },
-      { title: "Data Sync", url: `${basePath}/data-sync`, icon: RefreshCw },
+    ];
+    if (eventSync) {
+      items.push({ title: "Data Sync", url: `${basePath}/data-sync`, icon: RefreshCw });
+    }
+    items.push(
       { title: "Kiosk Mode", url: `/kiosk/${selectedCustomer.id}/${selectedEvent.id}`, icon: Monitor },
       { title: "Settings", url: `${basePath}/settings`, icon: Settings },
-    ];
+    );
+    return items;
   };
 
   const getCustomerMenuItems = () => {
@@ -128,7 +139,7 @@ export function AppSidebar() {
     const items = [
       { title: "Dashboard & Events", url: `/customers/${selectedCustomer.id}`, icon: LayoutDashboard },
     ];
-    if (user?.role !== "staff") {
+    if (user?.role !== "staff" && eventSync) {
       items.push({ title: "Integrations", url: `/customers/${selectedCustomer.id}/integrations`, icon: Link2 });
     }
     items.push(
@@ -139,7 +150,7 @@ export function AppSidebar() {
     return items;
   };
 
-  const globalMenuItems = isSuperAdmin ? [
+  const globalMenuItems = isMultiAccount ? [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
   ] : [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -152,12 +163,17 @@ export function AppSidebar() {
       const items = [
         { title: "Feedback", url: "/feedback", icon: MessageSquare },
         { title: "License & Features", url: `/customers/${selectedCustomer.id}/license`, icon: Crown },
+      ];
+      if (eventSync) {
+        items.push({ title: "Sync Insights", url: `/customers/${selectedCustomer.id}/sync-insights`, icon: Activity });
+      }
+      items.push(
         { title: "Badge Templates", url: `/customers/${selectedCustomer.id}/badge-templates`, icon: Palette },
         { title: "Locations", url: `/customers/${selectedCustomer.id}/locations`, icon: MapPin },
         { title: "Printer Settings", url: `/customers/${selectedCustomer.id}/printer-settings`, icon: Settings },
         { title: "User Management", url: `/customers/${selectedCustomer.id}/users`, icon: UserCircle },
         { title: "Data Retention", url: `/customers/${selectedCustomer.id}/data-retention`, icon: Shield },
-      ];
+      );
       return items;
     }
     if (user?.role === "admin") {
@@ -168,10 +184,15 @@ export function AppSidebar() {
     return [];
   };
 
+  const partnerItems = [
+    { title: "Accounts", url: "/customers", icon: Building2 },
+  ];
+
   const superAdminItems = [
     { title: "Accounts", url: "/customers", icon: Building2 },
     { title: "User Management", url: "/users", icon: UserCircle },
     { title: "Mission Control", url: "/mission-control", icon: Rocket },
+    { title: "Printer Diagnostics", url: "/printer-diagnostics", icon: Stethoscope },
     { title: "System Settings", url: "/settings", icon: Settings },
     { title: "Error Report", url: "/errors", icon: Bug },
     { title: "Settings Audit Log", url: "/audit-log", icon: ClipboardList },
@@ -199,7 +220,8 @@ export function AppSidebar() {
             <div>
               <h2 className="text-lg font-semibold text-[#0B2958] dark:text-white">Greet</h2>
               <p className="text-xs text-muted-foreground">
-                {user?.role === "super_admin" ? "Super Admin" 
+                {user?.role === "super_admin" ? "Super Admin"
+                  : user?.role === "partner" ? "Partner"
                   : user?.role === "admin" ? "Admin Mode"
                   : user?.role === "manager" ? "Manager Mode"
                   : "Staff Mode"}
@@ -214,11 +236,11 @@ export function AppSidebar() {
             <SidebarGroup>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  {isSuperAdmin && (
+                  {isMultiAccount && (
                     <SidebarMenuItem>
-                      <SidebarMenuButton 
-                        onClick={() => { localStorage.removeItem("checkmate_last_path"); clearAllContext(); setLocation('/'); }} 
-                        tooltip="Back to Dashboard" 
+                      <SidebarMenuButton
+                        onClick={() => { localStorage.removeItem("checkmate_last_path"); clearAllContext(); setLocation('/'); }}
+                        tooltip="Back to Dashboard"
                         data-testid="button-back-to-dashboard-from-event"
                       >
                         <LayoutDashboard className="h-4 w-4" />
@@ -272,8 +294,8 @@ export function AppSidebar() {
           </>
         ) : isInCustomerScope && selectedCustomer ? (
           <>
-            {/* Only show Back to Accounts for super admins */}
-            {isSuperAdmin && (
+            {/* Show Back to Accounts for multi-account users (super admins and partners) */}
+            {isMultiAccount && (
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
@@ -392,7 +414,7 @@ export function AppSidebar() {
                 </SidebarGroupContent>
               </SidebarGroup>
             )}
-            {(isSuperAdmin || user?.role === "admin") && (
+            {(isMultiAccount || user?.role === "admin") && (
               <SidebarGroup>
                 <SidebarGroupLabel>Administration</SidebarGroupLabel>
                 <SidebarGroupContent>
@@ -419,12 +441,12 @@ export function AppSidebar() {
           </>
         ) : (
           <>
-            {isSuperAdmin && (
+            {isMultiAccount && (
               <SidebarGroup>
-                <SidebarGroupLabel>Super Admin</SidebarGroupLabel>
+                <SidebarGroupLabel>{isSuperAdmin ? "Super Admin" : "Partner"}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {superAdminItems.map((item) => (
+                    {(isSuperAdmin ? superAdminItems : partnerItems).map((item) => (
                       <SidebarMenuItem key={item.title}>
                         <SidebarMenuButton
                           asChild
@@ -512,7 +534,7 @@ export function AppSidebar() {
               <BookOpen className="h-4 w-4 flex-shrink-0" />
               {!isCollapsed && <span>Event Setup Guide</span>}
             </Link>
-            {isSuperAdmin && (
+            {isMultiAccount && (
               <Link
                 href="/docs/account-setup"
                 className={`flex items-center ${isCollapsed ? 'justify-center w-8 h-8' : 'gap-2 w-full px-2 py-1.5'} rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors no-underline`}
@@ -545,9 +567,10 @@ export function AppSidebar() {
                         : user.email || "User"}
                     </p>
                     <Badge variant="secondary" className="text-xs">
-                      {user.role === "super_admin" ? "Super Admin" 
-                        : user.role === "admin" ? "Admin" 
-                        : user.role === "manager" ? "Manager" 
+                      {user.role === "super_admin" ? "Super Admin"
+                        : user.role === "partner" ? "Partner"
+                        : user.role === "admin" ? "Admin"
+                        : user.role === "manager" ? "Manager"
                         : "Staff"}
                     </Badge>
                   </div>

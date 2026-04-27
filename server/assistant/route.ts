@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
-import { GoogleGenAI } from "@google/genai";
-import { assistantToolDeclarations } from "./tools";
+import Anthropic from "@anthropic-ai/sdk";
+import { assistantTools } from "./tools";
 import { buildSystemPrompt } from "./system-prompt";
 import { executeTool } from "./tool-executor";
 import { checkEventSetup } from "./setup-checker";
@@ -8,7 +8,7 @@ import type { IStorage } from "../storage";
 import { isSuperAdmin } from "../auth";
 import { logger } from "../logger";
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "claude-sonnet-4-20250514";
 const MAX_HISTORY_TURNS = 20;
 const MAX_TOOL_ITERATIONS = 5;
 
@@ -29,16 +29,12 @@ const SELECTABLE_TOOLS: Record<string, { labelKey: string; idKey: string; action
 export function createAssistantRouter(storage: IStorage) {
   const router = Router();
 
-  const ai = new GoogleGenAI({
-    apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-    httpOptions: {
-      apiVersion: "",
-      baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-    },
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
   });
 
   router.post("/chat", async (req: Request, res: Response) => {
-    const dbUser = (req as any).dbUser;
+    const dbUser = req.dbUser;
     if (!dbUser) {
       res.status(401).json({ error: "Not authenticated" });
       return;
@@ -70,7 +66,7 @@ export function createAssistantRouter(storage: IStorage) {
     const customer = await storage.getCustomer(customerId);
     const customerName = customer?.name ?? "Your organisation";
 
-    const systemPrompt = buildSystemPrompt({
+    let currentSystemPrompt = buildSystemPrompt({
       customerName,
       eventName: event.name,
       eventId,
@@ -92,47 +88,35 @@ export function createAssistantRouter(storage: IStorage) {
     };
 
     try {
-      const geminiHistory = trimmedMessages.map((m) => ({
-        role: m.role === "assistant" ? ("model" as const) : ("user" as const),
-        parts: [{ text: m.content }],
+      // Build Claude message history
+      const claudeMessages: Anthropic.MessageParam[] = trimmedMessages.map((m) => ({
+        role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+        content: m.content,
       }));
 
-      let currentSystemPrompt = systemPrompt;
-
       for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-        const response = await ai.models.generateContent({
+        const response = await client.messages.create({
           model: MODEL,
-          contents: [
-            ...geminiHistory,
-          ],
-          config: {
-            systemInstruction: currentSystemPrompt,
-            temperature: 0.3,
-            maxOutputTokens: 600,
-            tools: assistantToolDeclarations,
-          },
+          max_tokens: 600,
+          temperature: 0.3,
+          system: currentSystemPrompt,
+          messages: claudeMessages,
+          tools: assistantTools,
         });
 
-        const candidate = response.candidates?.[0];
-        if (!candidate) {
-          sendEvent("error", { message: "No response generated. Please try again." });
-          break;
-        }
-
-        const parts = candidate.content?.parts ?? [];
         let hasToolCalls = false;
         let textContent = "";
 
-        for (const part of parts) {
-          if (part.text) {
-            textContent += part.text;
-            sendEvent("text", { content: part.text });
+        for (const block of response.content) {
+          if (block.type === "text") {
+            textContent += block.text;
+            sendEvent("text", { content: block.text });
           }
 
-          if (part.functionCall) {
+          if (block.type === "tool_use") {
             hasToolCalls = true;
-            const toolName = part.functionCall.name!;
-            const toolArgs = (part.functionCall.args as Record<string, unknown>) ?? {};
+            const toolName = block.name;
+            const toolArgs = (block.input as Record<string, unknown>) ?? {};
 
             sendEvent("tool_start", { tool: toolName });
 
@@ -197,15 +181,19 @@ export function createAssistantRouter(storage: IStorage) {
               });
             }
 
-            geminiHistory.push({
-              role: "model" as const,
-              parts: [{ text: textContent || " " }],
+            // Add the assistant's response (text + tool_use) to history
+            claudeMessages.push({
+              role: "assistant",
+              content: response.content,
             });
 
-            geminiHistory.push({
-              role: "user" as const,
-              parts: [{
-                text: `[Tool result for ${toolName}]: ${toolResultPayload}`,
+            // Add the tool result to history
+            claudeMessages.push({
+              role: "user",
+              content: [{
+                type: "tool_result",
+                tool_use_id: block.id,
+                content: toolResultPayload,
               }],
             });
 
@@ -228,7 +216,7 @@ export function createAssistantRouter(storage: IStorage) {
   });
 
   router.get("/setup-status/:eventId", async (req: Request, res: Response) => {
-    const dbUser = (req as any).dbUser;
+    const dbUser = req.dbUser;
     if (!dbUser) {
       res.status(401).json({ error: "Not authenticated" });
       return;

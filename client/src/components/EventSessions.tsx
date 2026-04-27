@@ -340,6 +340,7 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10"></TableHead>
                   <TableHead>Session</TableHead>
                   <TableHead>Time</TableHead>
                   <TableHead>Location</TableHead>
@@ -347,12 +348,52 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
                   <TableHead>Registrations</TableHead>
                   <TableHead>Check-ins</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredSessions.map((session) => (
                   <TableRow key={session.id} data-testid={`row-session-${session.id}`}>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" data-testid={`button-session-menu-${session.id}`}>
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem
+                            onClick={() => setEditingSession(session)}
+                            data-testid={`menu-edit-session-${session.id}`}
+                          >
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit Session
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setManagingSession(session)}
+                            data-testid={`menu-manage-checkins-${session.id}`}
+                          >
+                            <UserCheck className="h-4 w-4 mr-2" />
+                            Manage Check-ins
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setManagingSession(session)}
+                            data-testid={`menu-manage-registrations-${session.id}`}
+                          >
+                            <ListOrdered className="h-4 w-4 mr-2" />
+                            Manage Registrations
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setDeleteConfirmSession(session)}
+                            className="text-destructive"
+                            data-testid={`menu-delete-session-${session.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete Session
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
                     <TableCell>
                       <div className="space-y-1">
                         <div className="font-medium">{session.name}</div>
@@ -433,47 +474,6 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
                           </Badge>
                         )}
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" data-testid={`button-session-menu-${session.id}`}>
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() => setManagingSession(session)}
-                            data-testid={`menu-manage-checkins-${session.id}`}
-                          >
-                            <UserCheck className="h-4 w-4 mr-2" />
-                            Manage Check-ins
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setManagingSession(session)}
-                            data-testid={`menu-manage-registrations-${session.id}`}
-                          >
-                            <ListOrdered className="h-4 w-4 mr-2" />
-                            Manage Registrations
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => setEditingSession(session)}
-                            data-testid={`menu-edit-session-${session.id}`}
-                          >
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Session
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setDeleteConfirmSession(session)}
-                            className="text-destructive"
-                            data-testid={`menu-delete-session-${session.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete Session
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -798,6 +798,8 @@ function SessionManagementSheet({
 }: SessionManagementSheetProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"checkins" | "registrations">("checkins");
+  const [capacityOverrideAttendeeId, setCapacityOverrideAttendeeId] = useState<string | null>(null);
+  const [capacityInfo, setCapacityInfo] = useState<{ currentCount: number; capacity: number } | null>(null);
   const { toast } = useToast();
 
   const { data: registrations = [], isLoading: registrationsLoading } = useQuery<Registration[]>({
@@ -816,20 +818,36 @@ function SessionManagementSheet({
   });
 
   const checkInMutation = useMutation({
-    mutationFn: async (attendeeId: string) => {
-      const response = await apiRequest("POST", `/api/sessions/${session?.id}/checkin`, {
-        attendeeId,
-        source: "staff",
+    mutationFn: async ({ attendeeId, overrideCapacity }: { attendeeId: string; overrideCapacity?: boolean }) => {
+      const response = await fetch(`/api/sessions/${session?.id}/checkin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ attendeeId, source: "staff", overrideCapacity }),
       });
-      return response.json();
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.atCapacity) {
+          throw Object.assign(new Error(data.error), { atCapacity: true, currentCount: data.currentCount, capacity: data.capacity });
+        }
+        throw new Error(data.error || "Check-in failed");
+      }
+      return data;
     },
     onSuccess: () => {
+      setCapacityOverrideAttendeeId(null);
+      setCapacityInfo(null);
       queryClient.invalidateQueries({ queryKey: [`/api/sessions/${session?.id}/checkins`] });
       queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/sessions`] });
       queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/sessions/checkins/all`] });
       toast({ title: "Checked in", description: "Attendee has been checked in to this session." });
     },
-    onError: (error: Error) => {
+    onError: (error: any, variables) => {
+      if (error.atCapacity) {
+        setCapacityOverrideAttendeeId(variables.attendeeId);
+        setCapacityInfo({ currentCount: error.currentCount, capacity: error.capacity });
+        return;
+      }
       toast({ title: "Check-in failed", description: error.message, variant: "destructive" });
     },
   });
@@ -1000,7 +1018,7 @@ function SessionManagementSheet({
                         ) : (
                           <Button
                             size="sm"
-                            onClick={() => checkInMutation.mutate(attendee.id)}
+                            onClick={() => checkInMutation.mutate({ attendeeId: attendee.id })}
                             disabled={checkInMutation.isPending}
                             data-testid={`button-checkin-${attendee.id}`}
                           >
@@ -1070,6 +1088,33 @@ function SessionManagementSheet({
           )}
         </div>
       </SheetContent>
+
+      <Dialog open={!!capacityOverrideAttendeeId} onOpenChange={(open) => { if (!open) { setCapacityOverrideAttendeeId(null); setCapacityInfo(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Session at Capacity</DialogTitle>
+            <DialogDescription>
+              This session is currently at capacity ({capacityInfo?.currentCount}/{capacityInfo?.capacity}).
+              Do you want to override and check in this attendee anyway?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCapacityOverrideAttendeeId(null); setCapacityInfo(null); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (capacityOverrideAttendeeId) {
+                  checkInMutation.mutate({ attendeeId: capacityOverrideAttendeeId, overrideCapacity: true });
+                }
+              }}
+              disabled={checkInMutation.isPending}
+            >
+              {checkInMutation.isPending ? "Checking in..." : "Override & Check In"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }

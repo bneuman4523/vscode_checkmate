@@ -240,7 +240,7 @@ export default function BadgeTemplates() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {(template as any).layoutMode === 'foldable' ? (
+                {template.layoutMode === 'foldable' ? (
                   <FlippableBadge
                     front={<ReadOnlyBadgePreview template={template} maxWidth={200} renderSide="front" />}
                     back={<ReadOnlyBadgePreview template={template} maxWidth={200} renderSide="back" />}

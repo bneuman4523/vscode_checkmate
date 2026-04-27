@@ -122,6 +122,8 @@ class KioskPreCacheService {
         badgePrinted: a.badgePrinted || false,
         badgePrintedAt: a.badgePrintedAt,
         qrCode: a.qrCode || a.id,
+        externalId: a.externalId || undefined,
+        orderCode: a.orderCode || undefined,
         customFields: a.customFields,
         syncStatus: 'synced' as const,
         lastModified: new Date().toISOString(),

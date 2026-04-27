@@ -744,13 +744,13 @@ class PrintOrchestrator {
       case 'firstName': return badgeData.firstName;
       case 'lastName': return badgeData.lastName;
       case 'fullName': return `${badgeData.firstName} ${badgeData.lastName}`.trim();
-      case 'email': return (badgeData as any).email || badgeData.customFields?.email || '';
+      case 'email': return badgeData.email || badgeData.customFields?.email || '';
       case 'company': return badgeData.company || '';
       case 'title': return badgeData.title || '';
       case 'participantType': return badgeData.participantType;
       case 'externalId': return badgeData.externalId || '';
       case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
-      case 'orderCode': return (badgeData as any).orderCode || badgeData.customFields?.orderCode || '';
+      case 'orderCode': return badgeData.orderCode || badgeData.customFields?.orderCode || '';
       default:
         if (fieldName.startsWith('customField_')) {
           const key = fieldName.replace('customField_', '');

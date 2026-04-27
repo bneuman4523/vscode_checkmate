@@ -86,6 +86,7 @@ export interface IStorage {
   // Event management
   getAllEvents(): Promise<Event[]>;
   getEvents(customerId: string): Promise<Event[]>;
+  getEventsByIntegrationId(integrationId: string): Promise<Event[]>;
   getEvent(id: string): Promise<Event | undefined>;
   getEventByExternalId(customerId: string, externalEventId: string): Promise<Event | undefined>;
   createEvent(event: InsertEvent): Promise<Event>;
@@ -110,6 +111,7 @@ export interface IStorage {
   
   // Customer integration management
   getCustomerIntegrations(customerId: string): Promise<CustomerIntegration[]>;
+  getAllCustomerIntegrationIds(): Promise<string[]>;
   getCustomerIntegration(id: string): Promise<CustomerIntegration | undefined>;
   createCustomerIntegration(integration: InsertCustomerIntegration): Promise<CustomerIntegration>;
   updateCustomerIntegration(id: string, integration: Partial<InsertCustomerIntegration>): Promise<CustomerIntegration | undefined>;
@@ -250,6 +252,7 @@ export interface IStorage {
   getSyncJob(id: string): Promise<SyncJob | undefined>;
   getPendingSyncJobs(): Promise<SyncJob[]>;
   getPendingSyncJobsByConfig(configId: string): Promise<SyncJob[]>;
+  getActiveJobsByEventSyncState(eventSyncStateId: string): Promise<SyncJob[]>;
   getDueSyncJobs(): Promise<SyncJob[]>;
   getStaleRunningSyncJobs(): Promise<SyncJob[]>;
   createSyncJob(job: InsertSyncJob): Promise<SyncJob>;
@@ -2438,6 +2441,11 @@ export class MemStorage implements IStorage {
       .filter(j => j.status === 'pending' && j.endpointConfigId === configId);
   }
 
+  async getActiveJobsByEventSyncState(eventSyncStateId: string): Promise<SyncJob[]> {
+    return Array.from(this.syncJobs.values())
+      .filter(j => (j.status === 'pending' || j.status === 'running') && j.eventSyncStateId === eventSyncStateId);
+  }
+
   async getStaleRunningSyncJobs(): Promise<SyncJob[]> {
     return Array.from(this.syncJobs.values())
       .filter(j => j.status === 'running');
@@ -2458,7 +2466,9 @@ export class MemStorage implements IStorage {
       eventCodeMappingId: insertJob.eventCodeMappingId ?? null,
       endpointConfigId: insertJob.endpointConfigId ?? null,
       eventId: insertJob.eventId ?? null,
+      eventSyncStateId: insertJob.eventSyncStateId ?? null,
       jobType: insertJob.jobType,
+      syncTier: insertJob.syncTier ?? null,
       triggerType: insertJob.triggerType ?? 'manual',
       priority: insertJob.priority ?? 5,
       status: insertJob.status ?? 'pending',

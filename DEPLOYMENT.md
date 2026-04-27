@@ -48,8 +48,7 @@ docker build -t greet-app .
 
 | Variable | Description |
 |----------|-------------|
-| `AI_INTEGRATIONS_GEMINI_API_KEY` | Google Gemini API key (setup assistant, badge AI, feedback analysis) |
-| `AI_INTEGRATIONS_GEMINI_BASE_URL` | Gemini API base URL (optional, for proxy/custom endpoints) |
+| `ANTHROPIC_API_KEY` | Anthropic Claude API key (setup assistant, badge AI, feedback analysis) |
 
 ### Security
 

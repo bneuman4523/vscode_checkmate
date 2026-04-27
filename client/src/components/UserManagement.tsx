@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,6 +54,7 @@ import {
   UserCog, 
   User as UserIcon,
   Building,
+  Building2,
   Mail,
   Phone,
   CheckCircle2,
@@ -75,7 +77,7 @@ const userFormSchema = z.object({
   }).pipe(z.string().regex(/^\+[1-9]\d{1,14}$/, "Please enter a valid phone number with country code")),
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
-  role: z.enum(["super_admin", "admin", "manager", "staff"]),
+  role: z.enum(["super_admin", "partner", "admin", "manager", "staff"]),
   customerId: z.string().nullable().optional(),
   isActive: z.boolean().default(true),
   sendInviteSMS: z.boolean().default(true),
@@ -87,6 +89,7 @@ interface AuthInfo {
   user: User;
   customer: { id: string; name: string } | null;
   isSuperAdmin: boolean;
+  isPartner?: boolean;
 }
 
 export default function UserManagement() {
@@ -102,13 +105,15 @@ export default function UserManagement() {
     queryKey: ["/api/auth/me"],
   });
 
+  const isMultiAccount = authInfo?.isSuperAdmin || authInfo?.isPartner;
+
   const { data: customers = [], isLoading: customersLoading } = useQuery<Customer[]>({
     queryKey: ["/api/customers"],
-    enabled: authInfo?.isSuperAdmin,
+    enabled: !!isMultiAccount,
   });
 
-  const effectiveCustomerId = authInfo?.isSuperAdmin 
-    ? selectedCustomerId 
+  const effectiveCustomerId = isMultiAccount
+    ? selectedCustomerId
     : authInfo?.user?.customerId;
 
   const { data: users = [], isLoading: usersLoading } = useQuery<User[]>({
@@ -125,8 +130,17 @@ export default function UserManagement() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: UserFormValues) => {
-      return apiRequest("POST", "/api/users", data);
+    mutationFn: async (data: UserFormValues & { partnerCustomerIds?: string[] }) => {
+      const { partnerCustomerIds, ...userData } = data;
+      const res = await apiRequest("POST", "/api/users", userData);
+      const newUser = await res.json();
+      // If partner, save their customer assignments
+      if (userData.role === "partner" && partnerCustomerIds?.length) {
+        await apiRequest("PUT", `/api/users/${newUser.id}/partner-assignments`, {
+          customerIds: partnerCustomerIds,
+        });
+      }
+      return newUser;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
@@ -134,17 +148,24 @@ export default function UserManagement() {
       toast({ title: "User created successfully" });
     },
     onError: (error: Error) => {
-      toast({ 
-        title: "Failed to create user", 
+      toast({
+        title: "Failed to create user",
         description: error.message,
-        variant: "destructive" 
+        variant: "destructive"
       });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<UserFormValues> }) => {
-      return apiRequest("PATCH", `/api/users/${id}`, data);
+    mutationFn: async ({ id, data }: { id: string; data: Partial<UserFormValues> & { partnerCustomerIds?: string[] } }) => {
+      const { partnerCustomerIds, ...userData } = data;
+      await apiRequest("PATCH", `/api/users/${id}`, userData);
+      // If updating to/as partner, save their customer assignments
+      if (userData.role === "partner" && partnerCustomerIds !== undefined) {
+        await apiRequest("PUT", `/api/users/${id}/partner-assignments`, {
+          customerIds: partnerCustomerIds,
+        });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
@@ -152,10 +173,10 @@ export default function UserManagement() {
       toast({ title: "User updated successfully" });
     },
     onError: (error: Error) => {
-      toast({ 
-        title: "Failed to update user", 
+      toast({
+        title: "Failed to update user",
         description: error.message,
-        variant: "destructive" 
+        variant: "destructive"
       });
     },
   });
@@ -200,6 +221,8 @@ export default function UserManagement() {
     switch (role) {
       case "super_admin":
         return <Shield className="h-4 w-4" />;
+      case "partner":
+        return <Building2 className="h-4 w-4" />;
       case "admin":
         return <UserCog className="h-4 w-4" />;
       default:
@@ -211,6 +234,8 @@ export default function UserManagement() {
     switch (role) {
       case "super_admin":
         return "default";
+      case "partner":
+        return "default";
       case "admin":
         return "secondary";
       default:
@@ -220,7 +245,7 @@ export default function UserManagement() {
 
   const availableRoles = (): UserRole[] => {
     if (authInfo?.isSuperAdmin) {
-      return ["super_admin", "admin", "manager", "staff"];
+      return ["super_admin", "partner", "admin", "manager", "staff"];
     }
     return ["admin", "manager", "staff"];
   };
@@ -238,7 +263,7 @@ export default function UserManagement() {
     );
   }
 
-  if (!authInfo?.user || !["super_admin", "admin"].includes(authInfo.user.role)) {
+  if (!authInfo?.user || !["super_admin", "partner", "admin"].includes(authInfo.user.role)) {
     return (
       <Card>
         <CardContent className="py-12 text-center">
@@ -261,15 +286,15 @@ export default function UserManagement() {
             User Management
           </h2>
           <p className="text-muted-foreground mt-1">
-            {authInfo.isSuperAdmin 
-              ? "Manage users across all accounts"
+            {isMultiAccount
+              ? "Manage users across accounts"
               : `Manage users for ${authInfo.customer?.name || "your organization"}`
             }
           </p>
         </div>
-        
+
         <div className="flex items-center gap-3">
-          {authInfo.isSuperAdmin && (
+          {isMultiAccount && (
             <Select
               value={selectedCustomerId || "all"}
               onValueChange={(v) => setSelectedCustomerId(v === "all" ? null : v)}
@@ -361,7 +386,7 @@ export default function UserManagement() {
                       <Phone className="h-3 w-3" /> SMS
                     </Badge>
                   )}
-                  {authInfo.isSuperAdmin && user.customerId && (
+                  {isMultiAccount && user.customerId && (
                     <Badge variant="outline" className="gap-1 text-xs">
                       <Building className="h-3 w-3" />
                       {customers.find(c => c.id === user.customerId)?.name || "Unknown"}
@@ -407,7 +432,7 @@ export default function UserManagement() {
         open={isCreateDialogOpen}
         onOpenChange={setIsCreateDialogOpen}
         mode="create"
-        isSuperAdmin={authInfo.isSuperAdmin}
+        isSuperAdmin={!!isMultiAccount}
         customers={customers}
         defaultCustomerId={effectiveCustomerId}
         availableRoles={availableRoles()}
@@ -421,7 +446,7 @@ export default function UserManagement() {
           onOpenChange={(open) => !open && setEditingUser(null)}
           mode="edit"
           user={editingUser}
-          isSuperAdmin={authInfo.isSuperAdmin}
+          isSuperAdmin={!!isMultiAccount}
           customers={customers}
           defaultCustomerId={editingUser.customerId}
           availableRoles={availableRoles()}
@@ -521,7 +546,7 @@ interface UserDialogProps {
   customers: Customer[];
   defaultCustomerId: string | null | undefined;
   availableRoles: UserRole[];
-  onSubmit: (data: UserFormValues) => void;
+  onSubmit: (data: UserFormValues & { partnerCustomerIds?: string[] }) => void;
   isPending: boolean;
 }
 
@@ -537,6 +562,24 @@ function UserDialog({
   onSubmit,
   isPending,
 }: UserDialogProps) {
+  const [partnerCustomerIds, setPartnerCustomerIds] = useState<string[]>([]);
+
+  // Fetch existing partner assignments when editing a partner user
+  const { data: existingAssignments } = useQuery<Array<{ customerId: string }>>({
+    queryKey: ["/api/users", user?.id, "partner-assignments"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/users/${user!.id}/partner-assignments`);
+      return res.json();
+    },
+    enabled: !!user && user.role === "partner" && mode === "edit" && open,
+  });
+
+  useEffect(() => {
+    if (existingAssignments) {
+      setPartnerCustomerIds(existingAssignments.map(a => a.customerId));
+    }
+  }, [existingAssignments]);
+
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userFormSchema),
     defaultValues: {
@@ -575,6 +618,7 @@ function UserDialog({
           isActive: true,
           sendInviteSMS: true,
         });
+        setPartnerCustomerIds([]);
       }
     }
   }, [open, mode, user, defaultCustomerId, form]);
@@ -582,10 +626,10 @@ function UserDialog({
   const selectedRole = form.watch("role");
 
   const handleSubmit = (data: UserFormValues) => {
-    if (data.role === "super_admin") {
+    if (data.role === "super_admin" || data.role === "partner") {
       data.customerId = null;
     }
-    onSubmit(data);
+    onSubmit({ ...data, partnerCustomerIds: data.role === "partner" ? partnerCustomerIds : undefined });
   };
 
   return (
@@ -703,7 +747,44 @@ function UserDialog({
               )}
             />
             
-            {isSuperAdmin && selectedRole !== "super_admin" && (
+            {isSuperAdmin && selectedRole === "partner" && customers.length > 0 && (
+              <div className="space-y-2">
+                <FormLabel>Assigned Accounts <span className="text-destructive">*</span></FormLabel>
+                <p className="text-xs text-muted-foreground">
+                  Select which accounts this partner can access
+                </p>
+                <div className="border rounded-md max-h-[200px] overflow-y-auto">
+                  {customers.map((customer) => (
+                    <label
+                      key={customer.id}
+                      className="flex items-center gap-3 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                    >
+                      <Checkbox
+                        checked={partnerCustomerIds.includes(customer.id)}
+                        onCheckedChange={(checked) => {
+                          setPartnerCustomerIds(prev =>
+                            checked
+                              ? [...prev, customer.id]
+                              : prev.filter(id => id !== customer.id)
+                          );
+                        }}
+                      />
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Building2 className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                        <span className="text-sm truncate">{customer.name}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                {partnerCustomerIds.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {partnerCustomerIds.length} account{partnerCustomerIds.length !== 1 ? "s" : ""} selected
+                  </p>
+                )}
+              </div>
+            )}
+
+            {isSuperAdmin && selectedRole !== "super_admin" && selectedRole !== "partner" && (
               <FormField
                 control={form.control}
                 name="customerId"

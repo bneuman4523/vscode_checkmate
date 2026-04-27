@@ -222,8 +222,8 @@ export default function StaffDashboard() {
 
   const handleCheckinClick = useCallback(async (attendee: Attendee) => {
     // Try group check-in first if enabled
-    if (isGroupCheckinEnabled && (attendee as any).orderCode) {
-      const isGroup = await openGroupSheet((attendee as any).orderCode, attendee.id);
+    if (isGroupCheckinEnabled && attendee.orderCode) {
+      const isGroup = await openGroupSheet(attendee.orderCode, attendee.id);
       if (isGroup) return;
     }
     workflowActions.handleCheckinClick(attendee, () => setShowCheckinDialog(false));
@@ -465,8 +465,8 @@ export default function StaffDashboard() {
               onPrint={(id) => mutations.badgePrintedMutation.mutate(id)}
               onViewDetails={handleViewDetails}
               onQRScanFound={async (attendee: Attendee) => {
-                if (isGroupCheckinEnabled && (attendee as any).orderCode) {
-                  const isGroup = await openGroupSheet((attendee as any).orderCode, attendee.id);
+                if (isGroupCheckinEnabled && attendee.orderCode) {
+                  const isGroup = await openGroupSheet(attendee.orderCode, attendee.id);
                   if (isGroup) return;
                 }
                 setSelectedAttendee(attendee);

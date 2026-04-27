@@ -58,7 +58,7 @@ export function PrintPreviewDialog({
               title={data.attendee.title}
               participantType={data.attendee.participantType}
               externalId={data.attendee.externalId}
-              orderCode={(data.attendee as any).orderCode}
+              orderCode={data.attendee.orderCode}
               templateConfig={data.template}
               scale={0.8}
             />

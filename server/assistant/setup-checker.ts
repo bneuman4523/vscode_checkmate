@@ -50,8 +50,8 @@ export async function checkEventSetup(
   const customerPath = `/customers/${customerId}`;
   const items: SetupItem[] = [];
 
-  const staffEnabled = !!(event?.tempStaffSettings as any)?.enabled;
-  const kioskFromStaff = !!(event?.tempStaffSettings as any)?.allowKioskFromStaff;
+  const staffEnabled = !!(event?.tempStaffSettings)?.enabled;
+  const kioskFromStaff = !!(event?.tempStaffSettings)?.allowKioskFromStaff;
   const kioskEnabled = kioskFromStaff;
 
   items.push({
@@ -80,7 +80,7 @@ export async function checkEventSetup(
 
   const hasIntegration = (integrations ?? []).some((i) => i.status === "connected");
   if (hasIntegration || attendeeCount > 0) {
-    const statusesConfigured = !!(event?.syncSettings as any)?.statusesConfigured;
+    const statusesConfigured = !!(event?.syncSettings)?.statusesConfigured;
     items.push({
       id: "attendee_statuses",
       label: "Attendee statuses selected",
@@ -175,7 +175,7 @@ export async function checkEventSetup(
       complete: hasPin,
       severity: "required",
       fixAction: "set_kiosk_pin",
-      fixRoute: null,
+      fixRoute: `${basePath}/settings`,
     });
   } else {
     items.push({
@@ -185,7 +185,7 @@ export async function checkEventSetup(
       complete: false,
       severity: "optional",
       fixAction: null,
-      fixRoute: null,
+      fixRoute: `${basePath}/settings`,
     });
   }
 
@@ -227,7 +227,7 @@ export async function checkEventSetup(
     complete: staffEnabled,
     severity: "optional",
     fixAction: "set_temp_staff_access",
-    fixRoute: null,
+    fixRoute: `${basePath}/settings`,
   });
 
   items.push({
@@ -239,7 +239,7 @@ export async function checkEventSetup(
     complete: kioskFromStaff,
     severity: "optional",
     fixAction: "set_kiosk_mode",
-    fixRoute: null,
+    fixRoute: `${basePath}/settings`,
   });
 
   const required = items.filter((i) => i.severity === "required");

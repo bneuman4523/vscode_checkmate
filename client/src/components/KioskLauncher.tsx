@@ -41,6 +41,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useTheme } from "@/components/ThemeProvider";
 import { kioskPreCacheService, PreCacheProgress } from "@/services/kiosk-precache-service";
 import { offlineCheckinService } from "@/services/offline-checkin-service";
+import { offlineDB } from "@/lib/offline-db";
 import type { Event, Customer } from "@shared/schema";
 import type { SelectedPrinter } from "@/lib/printerPreferences";
 import { getPrinterDisplayName, getSavedPrinter, migrateLegacyPreferences } from "@/lib/printerPreferences";
@@ -163,6 +164,8 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
   const [eventTemplates, setEventTemplates] = useState<BadgeTemplateInfo[]>([]);
   const [templateMappings, setTemplateMappings] = useState<Record<string, TemplateMappingInfo> | null>(null);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [offlineFallbackEvents, setOfflineFallbackEvents] = useState<Event[] | null>(null);
+  const [isOfflineFallback, setIsOfflineFallback] = useState(false);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -317,15 +320,51 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
     retry: 2,
   });
 
+  // Use offline fallback events when available, otherwise filter online events
+  const effectiveEvents = isOfflineFallback && offlineFallbackEvents ? offlineFallbackEvents : customerEvents;
+  const activeEvents = effectiveEvents.filter(e => e.status === "active" || e.status === "upcoming");
+
+  // Offline fallback: when events API fails and we're offline, load from IndexedDB
   useEffect(() => {
-    if (preselectedEventId && customerEvents.length > 0 && !eventPreselected) {
-      const event = customerEvents.find(e => e.id === preselectedEventId);
+    if (eventsError && !isOnline) {
+      (async () => {
+        try {
+          const cachedEvents = await offlineDB.getAllEvents();
+          const filtered = cachedEvents.filter(e => e.customerId === customerId);
+          if (filtered.length > 0) {
+            const mappedEvents: Event[] = filtered.map(e => ({
+              id: e.id,
+              name: e.name,
+              eventDate: e.date,
+              customerId: e.customerId,
+              status: 'active',
+              defaultBadgeTemplateId: e.defaultBadgeTemplateId || null,
+            } as unknown as Event));
+            setOfflineFallbackEvents(mappedEvents);
+            setIsOfflineFallback(true);
+          }
+        } catch (err) {
+          console.error('[KioskLauncher] Failed to load offline fallback events:', err);
+        }
+      })();
+    } else if (!eventsError) {
+      // Online and working — clear any fallback state
+      if (isOfflineFallback) {
+        setIsOfflineFallback(false);
+        setOfflineFallbackEvents(null);
+      }
+    }
+  }, [eventsError, isOnline, customerId]);
+
+  useEffect(() => {
+    if (preselectedEventId && effectiveEvents.length > 0 && !eventPreselected) {
+      const event = effectiveEvents.find(e => e.id === preselectedEventId);
       if (event) {
         setSelectedEvent(event);
         setEventPreselected(true);
       }
     }
-  }, [preselectedEventId, customerEvents, eventPreselected]);
+  }, [preselectedEventId, effectiveEvents, eventPreselected]);
 
   const prevEventIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -343,8 +382,6 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
       setWizardStep(2);
     }
   }, [selectedEvent?.id]);
-
-  const activeEvents = customerEvents.filter(e => e.status === "active" || e.status === "upcoming");
 
   const handleSelectEvent = (event: Event) => {
     setSelectedEvent(event);
@@ -456,8 +493,8 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
     return tmpl ? tmpl.name : 'Selected Template';
   };
 
-  const isLoading = eventsLoading;
-  const hasError = eventsError;
+  const isLoading = eventsLoading && !isOfflineFallback;
+  const hasError = eventsError && !isOfflineFallback;
 
   if (isLoading) {
     return (
@@ -484,14 +521,18 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
         <Card className="w-full max-w-md border-2">
           <CardContent className="p-8 text-center space-y-6">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-destructive/10 mx-auto">
-              <AlertTriangle className="h-8 w-8 text-destructive" />
+              {!isOnline ? <WifiOff className="h-8 w-8 text-destructive" /> : <AlertTriangle className="h-8 w-8 text-destructive" />}
             </div>
             <div className="space-y-2">
-              <h2 className="text-2xl font-semibold">Failed to Load Events</h2>
+              <h2 className="text-2xl font-semibold">
+                {!isOnline ? "No Cached Data Available" : "Failed to Load Events"}
+              </h2>
               <p className="text-muted-foreground">
-                {eventsError?.message?.includes("Authentication")
-                  ? "Your session may have expired. Please sign in again."
-                  : "Could not load event data. Please check your connection and try again."}
+                {!isOnline
+                  ? "No cached data available. Connect to the internet and sync data first."
+                  : eventsError?.message?.includes("Authentication")
+                    ? "Your session may have expired. Please sign in again."
+                    : "Could not load event data. Please check your connection and try again."}
               </p>
             </div>
             <Button
@@ -543,6 +584,17 @@ export default function KioskLauncher({ customerId, onLaunch, preselectedEventId
           <StepIndicator currentStep={wizardStep} completedSteps={completedSteps} />
         </div>
       </div>
+
+      {isOfflineFallback && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800">
+          <div className="max-w-5xl mx-auto px-6 py-2 flex items-center gap-2">
+            <WifiOff className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="text-sm font-medium text-amber-800 dark:text-amber-300">
+              Offline Mode — Showing cached event data. Some features may be limited.
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col">
         <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-8">

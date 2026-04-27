@@ -718,7 +718,7 @@ export function WorkflowBadgePrint({
               title={getFieldValue('title')}
               participantType={attendee.participantType}
               externalId={attendee.externalId || undefined}
-              orderCode={(attendee as any).orderCode || undefined}
+              orderCode={attendee.orderCode || undefined}
               customFields={attendee.customFields as Record<string, string> | undefined}
               templateConfig={config}
             />
@@ -772,7 +772,7 @@ export function WorkflowBadgePrint({
                 title={getFieldValue('title')}
                 participantType={attendee.participantType}
                 externalId={attendee.externalId || undefined}
-                orderCode={(attendee as any).orderCode || undefined}
+                orderCode={attendee.orderCode || undefined}
                 customFields={attendee.customFields as Record<string, string> | undefined}
                 templateConfig={config}
               />
@@ -861,7 +861,7 @@ export function WorkflowBadgePrint({
               title={getFieldValue('title')}
               participantType={attendee.participantType}
               externalId={attendee.externalId || undefined}
-              orderCode={(attendee as any).orderCode || undefined}
+              orderCode={attendee.orderCode || undefined}
               customFields={attendee.customFields as Record<string, string> | undefined}
               templateConfig={config}
               scale={0.4}

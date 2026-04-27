@@ -78,10 +78,7 @@ SendGrid is used for **all transactional email** including:
 | Variable | Description |
 |----------|-------------|
 | `PRINTNODE_API_KEY` | Cloud printing via PrintNode |
-| `AI_INTEGRATIONS_OPENAI_API_KEY` | Badge design AI assistant |
-| `AI_INTEGRATIONS_OPENAI_BASE_URL` | OpenAI API base URL (default: https://api.openai.com/v1) |
-| `AI_INTEGRATIONS_GEMINI_API_KEY` | Feedback analysis AI |
-| `AI_INTEGRATIONS_GEMINI_BASE_URL` | Gemini API base URL |
+| `ANTHROPIC_API_KEY` | AI features: setup assistant, badge AI, feedback analysis (Claude) |
 | `SLACK_FEEDBACK_WEBHOOK_URL` | Slack alerts for feedback |
 
 ### Deployment Settings

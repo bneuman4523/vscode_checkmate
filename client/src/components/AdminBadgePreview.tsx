@@ -111,24 +111,24 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
       fontFamily: template.fontFamily || "Arial",
       includeQR: template.includeQR ?? true,
       qrPosition: template.qrPosition || "bottom-right",
-      customQrPosition: (template as any).customQrPosition || undefined,
-      qrCodeConfig: (template.qrCodeConfig as any) || {
+      customQrPosition: template.customQrPosition || undefined,
+      qrCodeConfig: template.qrCodeConfig || {
         embedType: "externalId" as const,
         fields: ["externalId"],
         separator: "|",
         includeLabel: false,
       },
-      mergeFields: (template.mergeFields as any[]) || [],
-      imageElements: (template as any).imageElements || [],
-      layoutMode: (template as any).layoutMode || 'single',
-      backSideMode: (template as any).backSideMode || 'blank',
-      backSideMergeFields: (template as any).backSideMergeFields || [],
-      backSideImageElements: (template as any).backSideImageElements || [],
-      backSideIncludeQR: (template as any).backSideIncludeQR ?? false,
-      backSideQrPosition: (template as any).backSideQrPosition || 'bottom-right',
-      backSideCustomQrPosition: (template as any).backSideCustomQrPosition || undefined,
-      backSideQrCodeConfig: (template as any).backSideQrCodeConfig || undefined,
-      backSideBackgroundColor: (template as any).backSideBackgroundColor || undefined,
+      mergeFields: template.mergeFields || [],
+      imageElements: template.imageElements || [],
+      layoutMode: template.layoutMode || 'single',
+      backSideMode: template.backSideMode || 'blank',
+      backSideMergeFields: template.backSideMergeFields || [],
+      backSideImageElements: template.backSideImageElements || [],
+      backSideIncludeQR: template.backSideIncludeQR ?? false,
+      backSideQrPosition: template.backSideQrPosition || 'bottom-right',
+      backSideCustomQrPosition: template.backSideCustomQrPosition || undefined,
+      backSideQrCodeConfig: template.backSideQrCodeConfig || undefined,
+      backSideBackgroundColor: template.backSideBackgroundColor || undefined,
     };
   };
 
@@ -371,7 +371,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                     {selectedTemplate?.qrCodeConfig && (
                       <Badge variant="secondary" className="text-xs">
                         <QrCode className="h-3 w-3 mr-1" />
-                        {(selectedTemplate.qrCodeConfig as any).embedType || "externalId"}
+                        {selectedTemplate.qrCodeConfig.embedType || "externalId"}
                       </Badge>
                     )}
                     <BadgeTemplateInfo
@@ -380,15 +380,15 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                       height={selectedTemplate?.height || undefined}
                       fontFamily={selectedTemplate?.fontFamily || undefined}
                       includeQR={selectedTemplate?.includeQR ?? true}
-                      qrEmbedType={(selectedTemplate?.qrCodeConfig as any)?.embedType}
+                      qrEmbedType={selectedTemplate?.qrCodeConfig?.embedType}
                       participantTypes={selectedTemplate?.participantTypes as string[] | undefined}
-                      layoutMode={(selectedTemplate as any)?.layoutMode || 'single'}
+                      layoutMode={selectedTemplate?.layoutMode || 'single'}
                     />
                   </div>
                 </div>
                 
                 <div className="flex justify-center p-4 bg-muted/50 rounded-lg">
-                  {(selectedTemplate as any)?.layoutMode === 'foldable' ? (
+                  {selectedTemplate?.layoutMode === 'foldable' ? (
                     <FlippableBadge
                       front={
                         <div className="border-2 border-border rounded-lg overflow-hidden shadow-lg" data-testid="badge-render-container">
@@ -400,7 +400,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                             title={selectedAttendee.title || undefined}
                             participantType={selectedAttendee.participantType || "General"}
                             externalId={selectedAttendee.externalId || undefined}
-                            orderCode={(selectedAttendee as any).orderCode || undefined}
+                            orderCode={selectedAttendee.orderCode || undefined}
                             templateConfig={getTemplateConfig(selectedTemplate)}
                             renderSide="front"
                             scale={0.6}
@@ -418,7 +418,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                             title={selectedAttendee.title || undefined}
                             participantType={selectedAttendee.participantType || "General"}
                             externalId={selectedAttendee.externalId || undefined}
-                            orderCode={(selectedAttendee as any).orderCode || undefined}
+                            orderCode={selectedAttendee.orderCode || undefined}
                             templateConfig={getTemplateConfig(selectedTemplate)}
                             renderSide="back"
                             scale={0.6}
@@ -437,7 +437,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                         title={selectedAttendee.title || undefined}
                         participantType={selectedAttendee.participantType || "General"}
                         externalId={selectedAttendee.externalId || undefined}
-                        orderCode={(selectedAttendee as any).orderCode || undefined}
+                        orderCode={selectedAttendee.orderCode || undefined}
                         templateConfig={getTemplateConfig(selectedTemplate)}
                         scale={0.6}
                         onLoadFont={fontContext?.loadFont}
@@ -451,7 +451,7 @@ export default function AdminBadgePreview({ eventId, customerId }: AdminBadgePre
                     <Label className="text-xs text-muted-foreground mb-2 block">QR Code Content</Label>
                     <code className="text-xs font-mono block break-all">
                       {(() => {
-                        const config = (selectedTemplate.qrCodeConfig as any);
+                        const config = selectedTemplate.qrCodeConfig;
                         const getVal = (f: string) => {
                           switch (f) {
                             case 'externalId': return selectedAttendee.externalId || '';

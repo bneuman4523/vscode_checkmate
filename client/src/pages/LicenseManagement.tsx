@@ -42,7 +42,10 @@ interface LicenseInfo {
 interface FeatureItem {
   key: string;
   name: string;
+  description: string | null;
   category: string;
+  basic: boolean;
+  premium: boolean | "coming_soon";
   enabled: boolean;
   metadata: Record<string, unknown> | null;
 }
@@ -638,38 +641,65 @@ export default function LicenseManagement() {
               .map(([category, catFeatures]) => (
                 <Card key={category}>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base">{CATEGORY_LABELS[category] || category}</CardTitle>
-                    <CardDescription>
-                      {catFeatures.filter(f => f.enabled).length} of {catFeatures.length} enabled
-                    </CardDescription>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-base">{CATEGORY_LABELS[category] || category}</CardTitle>
+                      <Badge variant="outline" className="text-xs">
+                        {catFeatures.filter(f => f.enabled).length}/{catFeatures.length} enabled
+                      </Badge>
+                    </div>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-2">
+                    <div className="space-y-1">
                       {catFeatures.map((feature) => (
-                        <div key={feature.key} className="flex items-center justify-between py-2 border-b last:border-0">
-                          <div className="flex items-center gap-2">
-                            {feature.enabled ? (
-                              <Check className="h-4 w-4 text-green-500 shrink-0" />
-                            ) : (
-                              <X className="h-4 w-4 text-muted-foreground shrink-0" />
-                            )}
-                            <span className={`text-sm ${!feature.enabled ? "text-muted-foreground" : ""}`}>
-                              {feature.name}
-                            </span>
+                        <div key={feature.key} className={`flex items-center justify-between py-3 px-3 rounded-md border-b last:border-0 ${feature.enabled ? "" : "opacity-60"}`}>
+                          <div className="flex items-start gap-3 flex-1 min-w-0">
+                            <div className="pt-0.5">
+                              {feature.enabled ? (
+                                <Check className="h-4 w-4 text-green-500 shrink-0" />
+                              ) : feature.premium === "coming_soon" ? (
+                                <Lock className="h-4 w-4 text-amber-500 shrink-0" />
+                              ) : (
+                                <X className="h-4 w-4 text-muted-foreground shrink-0" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-sm font-medium ${!feature.enabled ? "text-muted-foreground" : ""}`}>
+                                  {feature.name}
+                                </span>
+                                {feature.premium === "coming_soon" && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-amber-500 border-amber-300">
+                                    Coming Soon
+                                  </Badge>
+                                )}
+                                {!feature.basic && feature.premium !== "coming_soon" && (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                    Premium
+                                  </Badge>
+                                )}
+                              </div>
+                              {feature.description && (
+                                <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                                  {feature.description}
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          {isSuperAdmin ? (
-                            <Switch
-                              checked={feature.enabled}
-                              onCheckedChange={(checked) =>
-                                toggleFeatureMutation.mutate({ featureKey: feature.key, enabled: checked })
-                              }
-                              disabled={toggleFeatureMutation.isPending}
-                            />
-                          ) : (
-                            <Badge variant={feature.enabled ? "default" : "secondary"} className="text-xs">
-                              {feature.enabled ? "Enabled" : "Locked"}
-                            </Badge>
-                          )}
+                          <div className="shrink-0 ml-3">
+                            {isSuperAdmin && feature.premium !== "coming_soon" ? (
+                              <Switch
+                                checked={feature.enabled}
+                                onCheckedChange={(checked) =>
+                                  toggleFeatureMutation.mutate({ featureKey: feature.key, enabled: checked })
+                                }
+                                disabled={toggleFeatureMutation.isPending}
+                              />
+                            ) : (
+                              <Badge variant={feature.enabled ? "default" : "secondary"} className="text-xs">
+                                {feature.premium === "coming_soon" ? "Planned" : feature.enabled ? "Enabled" : "Disabled"}
+                              </Badge>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>

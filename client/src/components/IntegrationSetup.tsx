@@ -239,6 +239,7 @@ export default function IntegrationSetup() {
           providers={providers}
           customer={customer}
           canEditSettings={canEditSettings}
+          isSuperAdmin={isSuperAdmin}
           syncSettingsEditable={form.syncSettingsEditable}
           onSyncSettingsEditableChange={form.setSyncSettingsEditable}
           integrationName={form.integrationName}

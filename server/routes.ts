@@ -3,216 +3,45 @@ import type { Express, Request, Response, NextFunction } from "express";
 import express from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertPrinterSchema, insertCustomerSchema, insertEventSchema, insertBadgeTemplateSchema, insertCustomerIntegrationSchema, insertEventIntegrationSchema, insertAttendeeSchema, updateAttendeeSchema, insertIntegrationConnectionSchema, insertSessionSchema, insertUserSchema, insertIntegrationEndpointConfigSchema, insertEventCodeMappingSchema, insertSessionCodeMappingSchema, insertEventBadgeTemplateOverrideSchema, insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema, insertAttendeeSignatureSchema, insertEventConfigurationTemplateSchema, userRoles, type StaffSession, type Event } from "@shared/schema";
+import { insertPrinterSchema, insertCustomerSchema, insertEventSchema, insertBadgeTemplateSchema, insertCustomerIntegrationSchema, insertEventIntegrationSchema, insertAttendeeSchema, updateAttendeeSchema, insertIntegrationConnectionSchema, insertSessionSchema, insertUserSchema, insertIntegrationEndpointConfigSchema, insertEventCodeMappingSchema, insertSessionCodeMappingSchema, insertEventBadgeTemplateOverrideSchema, insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema, insertAttendeeSignatureSchema, insertEventConfigurationTemplateSchema, partnerCustomerAssignments } from "@shared/schema";
 import { z } from "zod";
-import { randomBytes, createHash, timingSafeEqual } from "crypto";
-import { 
-  encryptCredential, 
-  decryptCredential, 
+import rateLimit from "express-rate-limit";
+import {
+  encryptCredential,
   maskCredential,
-  generateState,
-  generatePKCEVerifier,
-  generatePKCEChallenge,
-  buildAuthorizationUrl,
-  exchangeCodeForTokens,
-  refreshAccessToken,
-  isTokenExpired,
-  calculateTokenExpiry
 } from "./credential-manager";
-import { authMiddleware, requireAuth, requireRole, canManageUsers, canAssignRole, getEffectiveCustomerId, isSuperAdmin } from "./auth";
+import { authMiddleware, requireAuth, requireRole, canManageUsers, canAssignRole, getEffectiveCustomerId, isSuperAdmin, isPartner, isPartnerOrAbove, getPartnerAssignedCustomerIds } from "./auth";
 import { badgeTemplateResolver } from "./services/badge-template-resolver";
 import { checkinSyncService } from "./services/checkin-sync-service";
 import badgeAiRoutes from "./routes/badge-ai";
 import { createAssistantRouter } from "./assistant/route";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { registerLocalStorageRoutes } from "./services/local-storage";
+import { registerS3StorageRoutes } from "./services/s3-storage";
 import { registerReportRoutes } from "./routes/reports";
+import { registerSyncInsightsRoutes } from "./routes/sync-insights";
+import { registerPrinterDiagnosticsRoutes } from "./routes/printer-diagnostics";
+import { registerTempStaffRoutes } from "./routes/temp-staff";
+import { registerKioskRoutes } from "./routes/kiosk";
+import { registerWorkflowRoutes } from "./routes/workflows";
+import { registerIntegrationConnectionRoutes } from "./routes/integration-connections";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
+import { db } from "./db";
+import { eq, and, inArray } from "drizzle-orm";
+import {
+  validatePasswordComplexity,
+  saveSession,
+  regenerateSession,
+  sanitizeAttendeeData,
+  logSettingsAudit,
+  hashPasscode,
+  updateUserSchema,
+  penTestMode,
+  startRateLimiterCleanup,
+} from "./routes/shared";
 
 const logger = createChildLogger('Routes');
-
-function sanitizeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
-
-function validatePasswordComplexity(password: string): string | null {
-  if (!password || password.length < 10) return "Password must be at least 10 characters";
-  if (!/[a-z]/.test(password)) return "Password must contain at least one lowercase letter";
-  if (!/[A-Z]/.test(password)) return "Password must contain at least one uppercase letter";
-  if (!/[0-9]/.test(password)) return "Password must contain at least one number";
-  return null;
-}
-
-function saveSession(session: import('express-session').Session & Partial<import('express-session').SessionData>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    session.save((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-function regenerateSession(session: import('express-session').Session & Partial<import('express-session').SessionData>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    session.regenerate((err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
-
-function sanitizeAttendeeData<T extends Record<string, string | undefined | null>>(data: T): T {
-  const fieldsToSanitize = ['firstName', 'lastName', 'email', 'company', 'title', 'phone'] as const;
-  const sanitized = { ...data };
-  for (const field of fieldsToSanitize) {
-    if (typeof sanitized[field] === 'string') {
-      (sanitized as Record<string, string | undefined | null>)[field] = sanitizeHtml(sanitized[field] as string);
-    }
-  }
-  return sanitized;
-}
-
-// Audit logging helper for tracking integration/webhook settings changes
-async function logSettingsAudit(req: Request, options: {
-  action: string;
-  resourceType: string;
-  resourceId: string;
-  resourceName?: string;
-  customerId?: string;
-  customerName?: string;
-  oldValues: Record<string, any>;
-  newValues: Record<string, any>;
-}) {
-  try {
-    const user = req.dbUser;
-    if (!user) return;
-
-    const changedFields: Array<{ field: string; oldValue: any; newValue: any }> = [];
-    for (const key of Object.keys(options.newValues)) {
-      const oldVal = options.oldValues[key];
-      const newVal = options.newValues[key];
-      if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
-        changedFields.push({ field: key, oldValue: oldVal, newValue: newVal });
-      }
-    }
-
-    if (changedFields.length === 0) return;
-
-    await storage.createAuditLog({
-      userId: user.id,
-      userEmail: user.email || "unknown",
-      userRole: user.role,
-      customerId: options.customerId || null,
-      customerName: options.customerName || null,
-      action: options.action,
-      resourceType: options.resourceType,
-      resourceId: options.resourceId,
-      resourceName: options.resourceName || null,
-      changedFields,
-      metadata: null,
-      ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || null,
-      userAgent: req.headers["user-agent"] || null,
-    });
-  } catch (error) {
-    logger.error({ err: error }, "Failed to log audit entry");
-  }
-}
-
-// Temp Staff Utilities
-function hashPasscode(passcode: string): string {
-  return createHash('sha256').update(passcode).digest('hex');
-}
-
-function verifyPasscode(passcode: string, hash: string): boolean {
-  const inputHash = Buffer.from(hashPasscode(passcode), 'hex');
-  const storedHash = Buffer.from(hash, 'hex');
-  if (inputHash.length !== storedHash.length) return false;
-  return timingSafeEqual(inputHash, storedHash);
-}
-
-function generateSessionToken(): string {
-  return randomBytes(32).toString('hex');
-}
-
-// Extended request type for temp staff auth
-interface StaffRequest extends Request {
-  staffSession?: StaffSession;
-  staffEvent?: Event;
-}
-
-// Middleware to validate temp staff session token
-async function staffAuth(req: StaffRequest, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: "Missing or invalid authorization header" });
-  }
-  
-  const token = authHeader.substring(7);
-  const session = await storage.getStaffSessionByToken(token);
-  
-  if (!session) {
-    return res.status(401).json({ error: "Invalid or expired session token" });
-  }
-  
-  // Check if session is still active and not expired
-  if (!session.isActive || new Date(session.expiresAt) < new Date()) {
-    return res.status(401).json({ error: "Session has expired" });
-  }
-  
-  // Get the event and verify temp staff access is still valid
-  const event = await storage.getEvent(session.eventId);
-  if (!event || !event.tempStaffSettings?.enabled) {
-    return res.status(403).json({ error: "Temp staff access is no longer enabled for this event" });
-  }
-  
-  // Block access to unconfigured events
-  if (event.configStatus === 'unconfigured') {
-    return res.status(403).json({ 
-      error: "This event has not been configured for check-in yet",
-      code: "EVENT_NOT_CONFIGURED"
-    });
-  }
-  
-  // Check time window - only enforce if times are set
-  const now = new Date();
-  const settings = event.tempStaffSettings;
-  
-  if (settings.startTime) {
-    const startTime = new Date(settings.startTime);
-    if (now < startTime) {
-      return res.status(403).json({ error: "Temp staff access has not started yet" });
-    }
-  }
-  
-  if (settings.endTime) {
-    const endTime = new Date(settings.endTime);
-    if (now > endTime) {
-      return res.status(403).json({ error: "Temp staff access has ended" });
-    }
-  }
-  
-  req.staffSession = session;
-  req.staffEvent = event;
-  next();
-}
-
-// Strict schema for user updates - only allow specific fields
-const updateUserSchema = z.object({
-  email: z.string().email().optional(),
-  firstName: z.string().min(1).optional(),
-  lastName: z.string().min(1).optional(),
-  phoneNumber: z.string().regex(/^\+[1-9]\d{1,14}$/, "Phone must be in E.164 format (e.g., +15551234567)").optional().nullable(),
-  role: z.enum(userRoles).optional(),
-  customerId: z.string().nullable().optional(),
-  isActive: z.boolean().optional(),
-  sendInviteSMS: z.boolean().optional(), // Ignored for updates, but allowed from form
-}).strict(); // Reject unknown fields
 
 export async function registerRoutes(app: Express): Promise<Server> {
   
@@ -222,16 +51,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Apply authentication middleware to all routes
   app.use(authMiddleware);
   
-  // Register object storage routes (after authMiddleware so req.dbUser is populated)
+  // Register file storage routes (after authMiddleware so req.dbUser is populated)
   if (process.env.REPL_ID) {
     registerObjectStorageRoutes(app);
+  } else if (process.env.S3_BUCKET_NAME) {
+    registerS3StorageRoutes(app);
   } else {
     registerLocalStorageRoutes(app);
   }
   
   // Register report routes (must be after authMiddleware so req.dbUser is populated)
   registerReportRoutes(app);
-  
+
+  // Register sync insights routes (super_admin + admin)
+  registerSyncInsightsRoutes(app);
+
+  // Register printer diagnostics routes (super_admin only)
+  registerPrinterDiagnosticsRoutes(app);
+
+  // Register temp staff routes (staff auth, check-in, printing, workflows)
+  registerTempStaffRoutes(app);
+
+  // Register kiosk public routes (PIN-protected)
+  registerKioskRoutes(app);
+
+  // Register workflow routes (config, steps, questions, disclaimers, responses, signatures)
+  registerWorkflowRoutes(app);
+
+  // Register integration connection + sync routes (OAuth2, API keys, event sync state)
+  registerIntegrationConnectionRoutes(app);
+
   // =====================
   // Auth Routes
   // =====================
@@ -242,18 +91,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.dbUser) {
         return res.status(401).json({ error: "Not authenticated" });
       }
-      
+
       const { id, email, firstName, lastName, role, customerId, isActive } = req.dbUser;
-      
+
       let customer = null;
       if (customerId) {
         customer = await storage.getCustomer(customerId);
       }
-      
+
+      // For partners, include their assigned customer IDs
+      let assignedCustomerIds: string[] | undefined;
+      if (role === "partner") {
+        assignedCustomerIds = await getPartnerAssignedCustomerIds(id);
+      }
+
       res.json({
         user: { id, email, firstName, lastName, role, customerId, isActive },
         customer: customer ? { id: customer.id, name: customer.name } : null,
         isSuperAdmin: role === "super_admin",
+        isPartner: role === "partner",
+        assignedCustomerIds,
       });
     } catch (error) {
       logger.error({ err: error }, "Error fetching current user");
@@ -320,6 +177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const otpRateLimits = new Map<string, { count: number; resetAt: number }>();
   const OTP_RATE_LIMIT = penTestMode ? 500 : 5; // max requests per window
   const OTP_RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
+  startRateLimiterCleanup(otpRateLimits, (entry, now) => now > entry.resetAt);
 
 
   // Request OTP code for login (SMS primary, email backup)
@@ -425,6 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const otpVerifyAttempts = new Map<string, { count: number; resetAt: number }>();
   const OTP_VERIFY_LIMIT = 5; // max failed attempts before lockout
   const OTP_VERIFY_WINDOW = 15 * 60 * 1000; // 15 minute lockout
+  startRateLimiterCleanup(otpVerifyAttempts, (entry, now) => now > entry.resetAt);
 
   // Verify OTP code and login
   app.post("/api/auth/verify-otp", async (req, res) => {
@@ -807,6 +666,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const errorLogLimits = new Map<string, { count: number; resetAt: number }>();
   const ERROR_LOG_RATE_LIMIT = 30;
   const ERROR_LOG_RATE_WINDOW = 60 * 1000;
+  startRateLimiterCleanup(errorLogLimits, (entry, now) => now > entry.resetAt);
 
   // Log an error (internal use - for client-side error logging)
   app.post("/api/errors/log", async (req, res) => {
@@ -1311,19 +1171,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!canManageUsers(req.dbUser)) {
         return res.status(403).json({ error: "Only admins can view users" });
       }
-      
+
       const customerId = req.query.customerId as string;
-      
+
       if (isSuperAdmin(req.dbUser)) {
         if (customerId) {
-          // Inside a customer account - show only that customer's users
           const users = await storage.getUsersByCustomer(customerId);
           res.json(users);
         } else {
-          // Root level - only show super admin users (no customer assignment)
+          // Root level - show super admin and partner users (no customer assignment)
           const allUsers = await storage.getAllUsers();
-          const superAdminUsers = allUsers.filter(u => u.role === 'super_admin');
-          res.json(superAdminUsers);
+          const globalUsers = allUsers.filter(u => u.role === 'super_admin' || u.role === 'partner');
+          res.json(globalUsers);
+        }
+      } else if (isPartner(req.dbUser) && req.dbUser) {
+        if (customerId) {
+          // Verify partner has access to this customer
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(customerId)) {
+            return res.status(403).json({ error: "Not assigned to this customer" });
+          }
+          const users = await storage.getUsersByCustomer(customerId);
+          res.json(users);
+        } else {
+          return res.json([]);
         }
       } else {
         if (!req.dbUser?.customerId) {
@@ -1345,11 +1216,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
-      
-      if (!isSuperAdmin(req.dbUser) && user.customerId !== req.dbUser?.customerId) {
+
+      if (isSuperAdmin(req.dbUser)) {
+        return res.json(user);
+      }
+
+      if (isPartner(req.dbUser) && req.dbUser && user.customerId) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.includes(user.customerId)) {
+          return res.json(user);
+        }
+      }
+
+      if (user.customerId !== req.dbUser?.customerId) {
         return res.status(403).json({ error: "Access denied" });
       }
-      
+
       res.json(user);
     } catch (error) {
       logger.error({ err: error }, "Error fetching user");
@@ -1372,21 +1254,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Customer scoping
-      if (!isSuperAdmin(req.dbUser)) {
+      if (!isSuperAdmin(req.dbUser) && !isPartner(req.dbUser)) {
         if (userData.customerId && userData.customerId !== req.dbUser?.customerId) {
           return res.status(403).json({ error: "Cannot create users in other customers" });
         }
         userData.customerId = req.dbUser?.customerId;
+      } else if (isPartner(req.dbUser) && req.dbUser && userData.customerId) {
+        // Partners can only create users in their assigned customers
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (!assignedIds.includes(userData.customerId)) {
+          return res.status(403).json({ error: "Cannot create users in unassigned customers" });
+        }
       }
       
-      // Super admin validation
-      if (userData.role === "super_admin" && userData.customerId) {
-        return res.status(400).json({ error: "Super admins cannot be assigned to a customer" });
+      // Super admin and partner validation — these roles span multiple accounts
+      if ((userData.role === "super_admin" || userData.role === "partner") && userData.customerId) {
+        return res.status(400).json({ error: `${userData.role === "super_admin" ? "Super admins" : "Partners"} cannot be assigned to a single customer` });
       }
-      
-      // Non-super_admin must have customerId
-      if (userData.role !== "super_admin" && !userData.customerId) {
-        return res.status(400).json({ error: "Non-super admin users must be assigned to a customer" });
+
+      // Non-global roles must have customerId
+      if (userData.role !== "super_admin" && userData.role !== "partner" && !userData.customerId) {
+        return res.status(400).json({ error: "Non-global users must be assigned to a customer" });
       }
       
       // Check for existing user with same email
@@ -1454,9 +1342,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "User not found" });
       }
       
-      // Non-super admin can only send invites to users in their customer
-      if (!isSuperAdmin(req.dbUser) && user.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Cannot send invites to users in other customers" });
+      // Non-super admin can only send invites to users in their customer (or assigned for partners)
+      if (!isSuperAdmin(req.dbUser)) {
+        if (isPartner(req.dbUser) && req.dbUser && user.customerId) {
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(user.customerId)) {
+            return res.status(403).json({ error: "Cannot send invites to users in unassigned customers" });
+          }
+        } else if (user.customerId !== req.dbUser?.customerId) {
+          return res.status(403).json({ error: "Cannot send invites to users in other customers" });
+        }
       }
       
       // Check if user has a phone number
@@ -1572,19 +1467,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Only admins can update other users" });
       }
       
-      // Non-super admin can only update users in their customer
-      if (!isSuperAdmin(req.dbUser) && targetUser.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Cannot update users in other customers" });
+      // Non-super admin can only update users in their customer (or assigned customers for partners)
+      if (!isSuperAdmin(req.dbUser)) {
+        if (isPartner(req.dbUser) && req.dbUser && targetUser.customerId) {
+          const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+          if (!assignedIds.includes(targetUser.customerId)) {
+            return res.status(403).json({ error: "Cannot update users in unassigned customers" });
+          }
+        } else if (targetUser.customerId !== req.dbUser?.customerId) {
+          return res.status(403).json({ error: "Cannot update users in other customers" });
+        }
       }
       
-      // Non-super admin cannot update super admin users
-      if (!isSuperAdmin(req.dbUser) && targetUser.role === "super_admin") {
-        return res.status(403).json({ error: "Cannot update super admin users" });
+      // Non-super admin cannot update super admin or partner users
+      if (!isSuperAdmin(req.dbUser) && (targetUser.role === "super_admin" || targetUser.role === "partner")) {
+        return res.status(403).json({ error: "Cannot update super admin or partner users" });
       }
-      
-      // SECURITY: Non-super admin cannot assign super_admin role to anyone
-      if (!isSuperAdmin(req.dbUser) && updates.role === "super_admin") {
-        return res.status(403).json({ error: "Only super admins can assign super_admin role" });
+
+      // SECURITY: Only super admins can assign super_admin or partner roles
+      if (!isSuperAdmin(req.dbUser) && (updates.role === "super_admin" || updates.role === "partner")) {
+        return res.status(403).json({ error: "Only super admins can assign super_admin or partner roles" });
       }
       
       // Role validation using canAssignRole
@@ -1596,14 +1498,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const newRole = updates.role ?? targetUser.role;
       const newCustomerId = updates.customerId !== undefined ? updates.customerId : targetUser.customerId;
       
-      // Super admins cannot have a customerId
-      if (newRole === "super_admin" && newCustomerId) {
-        return res.status(400).json({ error: "Super admins cannot be assigned to a customer" });
+      // Super admins and partners cannot have a customerId
+      if ((newRole === "super_admin" || newRole === "partner") && newCustomerId) {
+        return res.status(400).json({ error: `${newRole === "super_admin" ? "Super admins" : "Partners"} cannot be assigned to a single customer` });
       }
-      
-      // Non-super_admin must have customerId
-      if (newRole !== "super_admin" && !newCustomerId) {
-        return res.status(400).json({ error: "Non-super admin users must be assigned to a customer" });
+
+      // Non-global roles must have customerId
+      if (newRole !== "super_admin" && newRole !== "partner" && !newCustomerId) {
+        return res.status(400).json({ error: "Non-global users must be assigned to a customer" });
       }
       
       // SECURITY: Non-super admins cannot remove customerId from users
@@ -1679,13 +1581,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const customers = await storage.getCustomers();
         return res.json(customers);
       }
-      
+
+      // Partners see only their assigned customers
+      if (isPartner(req.dbUser) && req.dbUser) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.length === 0) return res.json([]);
+        const allCustomers = await storage.getCustomers();
+        return res.json(allCustomers.filter(c => assignedIds.includes(c.id)));
+      }
+
       // Non-super-admins can only see their own customer
       if (req.dbUser?.customerId) {
         const customer = await storage.getCustomer(req.dbUser.customerId);
         return res.json(customer ? [customer] : []);
       }
-      
+
       // Users without a customer assignment see nothing
       return res.json([]);
     } catch (error) {
@@ -1701,12 +1611,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!customer) {
         return res.status(404).json({ error: "Customer not found" });
       }
-      
-      // Non-super-admins can only access their own customer
-      if (!isSuperAdmin(req.dbUser) && req.dbUser?.customerId !== customer.id) {
+
+      // Super admins can access any customer
+      if (isSuperAdmin(req.dbUser)) {
+        return res.json(customer);
+      }
+
+      // Partners can access their assigned customers
+      if (isPartner(req.dbUser) && req.dbUser) {
+        const assignedIds = await getPartnerAssignedCustomerIds(req.dbUser.id);
+        if (assignedIds.includes(customer.id)) {
+          return res.json(customer);
+        }
         return res.status(403).json({ error: "Access denied" });
       }
-      
+
+      // Other roles can only access their own customer
+      if (req.dbUser?.customerId !== customer.id) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
       res.json(customer);
     } catch (error) {
       logger.error({ err: error }, "Error fetching customer");
@@ -1836,9 +1760,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =====================
+  // Partner Customer Assignments (super admin only)
+  // =====================
+
+  // Get assigned customers for a partner user
+  app.get("/api/users/:userId/partner-assignments", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const targetUser = await storage.getUser(req.params.userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (targetUser.role !== "partner") {
+        return res.status(400).json({ error: "User is not a partner" });
+      }
+      const assignments = await db.select()
+        .from(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+      res.json(assignments);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching partner assignments");
+      res.status(500).json({ error: "Failed to fetch partner assignments" });
+    }
+  });
+
+  // Set partner customer assignments (replaces all existing)
+  app.put("/api/users/:userId/partner-assignments", requireAuth, requireRole("super_admin"), async (req, res) => {
+    try {
+      const targetUser = await storage.getUser(req.params.userId);
+      if (!targetUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (targetUser.role !== "partner") {
+        return res.status(400).json({ error: "User is not a partner" });
+      }
+
+      const { customerIds } = z.object({
+        customerIds: z.array(z.string()),
+      }).parse(req.body);
+
+      // Validate all customer IDs exist (batch query, not N+1)
+      if (customerIds.length > 0) {
+        const allCustomers = await storage.getCustomers();
+        const existingIds = new Set(allCustomers.map(c => c.id));
+        const missing = customerIds.filter(id => !existingIds.has(id));
+        if (missing.length > 0) {
+          return res.status(400).json({ error: `Customer(s) not found: ${missing.join(", ")}` });
+        }
+      }
+
+      // Delete existing assignments
+      await db.delete(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+
+      // Create new assignments
+      if (customerIds.length > 0) {
+        await db.insert(partnerCustomerAssignments).values(
+          customerIds.map(cid => ({
+            userId: req.params.userId,
+            customerId: cid,
+            assignedBy: req.dbUser!.id,
+          }))
+        );
+      }
+
+      const assignments = await db.select()
+        .from(partnerCustomerAssignments)
+        .where(eq(partnerCustomerAssignments.userId, req.params.userId));
+      res.json(assignments);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating partner assignments");
+      res.status(500).json({ error: "Failed to update partner assignments" });
+    }
+  });
+
+  // =====================
   // Location Routes (scoped to customer, requires authentication)
   // =====================
-  
+
   // Get locations for a customer
   app.get("/api/locations", requireAuth, async (req, res) => {
     try {
@@ -2070,763 +2068,149 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ===== Kiosk Public Endpoints (PIN-protected) =====
 
-  const kioskPinAttempts = new Map<string, { count: number; firstAttempt: number; lockedUntil?: number }>();
-  const KIOSK_PIN_MAX_ATTEMPTS = penTestMode ? 500 : 5;
-  const KIOSK_PIN_WINDOW_MS = 15 * 60 * 1000;
-  const KIOSK_PIN_LOCKOUT_MS = 30 * 60 * 1000;
+  // Rate limiter for expensive operations (event copy, bulk imports)
+  const expensiveOpLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: penTestMode ? 100 : 5, // 5 per minute per user
+    keyGenerator: (req) => req.dbUser?.id || req.ip || 'unknown',
+    message: { error: "Too many requests. Please wait a moment and try again." },
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
 
-  function checkKioskPinRateLimit(eventId: string, ip: string): { allowed: boolean; retryAfterMs?: number } {
-    const key = `${eventId}:${ip}`;
-    const now = Date.now();
-    const record = kioskPinAttempts.get(key);
-
-    if (record?.lockedUntil && now < record.lockedUntil) {
-      return { allowed: false, retryAfterMs: record.lockedUntil - now };
-    }
-
-    if (!record || now - record.firstAttempt > KIOSK_PIN_WINDOW_MS) {
-      kioskPinAttempts.set(key, { count: 1, firstAttempt: now });
-      return { allowed: true };
-    }
-
-    if (record.count >= KIOSK_PIN_MAX_ATTEMPTS) {
-      record.lockedUntil = now + KIOSK_PIN_LOCKOUT_MS;
-      return { allowed: false, retryAfterMs: KIOSK_PIN_LOCKOUT_MS };
-    }
-
-    record.count++;
-    return { allowed: true };
-  }
-
-  function validateKioskPin(eventPin: string | null, providedPin: string, eventId: string, ip: string, res: any): boolean {
-    const rateCheck = checkKioskPinRateLimit(eventId, ip);
-    if (!rateCheck.allowed) {
-      res.status(429).json({ error: "Too many attempts. Please try again later." });
-      return false;
-    }
-
-    if (!eventPin || eventPin !== providedPin) {
-      res.status(403).json({ error: "Invalid kiosk PIN" });
-      return false;
-    }
-
-    const key = `${eventId}:${ip}`;
-    kioskPinAttempts.delete(key);
-    return true;
-  }
-
-  app.get("/api/kiosk/:eventId/launch-info", async (req, res) => {
+  // Copy/duplicate an event with all its configuration
+  app.post("/api/events/:sourceEventId/copy", requireAuth, requireRole(['super_admin', 'partner', 'admin', 'manager']), expensiveOpLimiter, async (req, res) => {
     try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
+      const sourceEvent = await storage.getEvent(req.params.sourceEventId);
+      if (!sourceEvent) {
+        return res.status(404).json({ error: "Source event not found" });
       }
-      const customer = await storage.getCustomer(event.customerId);
-      if (!customer) {
-        return res.status(404).json({ error: "Customer not found" });
+
+      if (!isSuperAdmin(req.dbUser) && !isPartner(req.dbUser) && req.dbUser?.customerId !== sourceEvent.customerId) {
+        return res.status(403).json({ error: "Access denied" });
       }
-      const hasPin = !!(event.tempStaffSettings as any)?.kioskPin;
-      // Resolve branding: event override if enabled, otherwise account default
-      const eventBranding = (event.kioskBrandingOverride as any)?.enabled ? event.kioskBrandingOverride : null;
-      const branding = eventBranding || customer.kioskBranding || null;
-      res.json({
-        event: {
-          id: event.id,
-          name: event.name,
-          customerId: event.customerId,
-          startDate: event.startDate,
-          endDate: event.endDate,
-          status: event.status,
-        },
-        customer: {
-          id: customer.id,
-          name: customer.name,
-        },
-        hasPin,
-        branding,
-        badgeSettings: event.badgeSettings || null,
+
+      const copyInput = z.object({
+        name: z.string().min(1).max(500).optional(),
+        eventDate: z.string().datetime().optional(),
+      }).parse(req.body);
+
+      const newName = copyInput.name || `${sourceEvent.name} (Copy)`;
+      const newDate = copyInput.eventDate ? new Date(copyInput.eventDate) : sourceEvent.eventDate;
+
+      // Create the new event with copied settings
+      const newEvent = await storage.createEvent({
+        customerId: sourceEvent.customerId,
+        name: newName,
+        eventDate: newDate,
+        timezone: sourceEvent.timezone,
+        locationId: sourceEvent.locationId,
+        defaultBadgeTemplateId: sourceEvent.defaultBadgeTemplateId,
+        selectedPrinterId: sourceEvent.selectedPrinterId,
+        printerSettings: sourceEvent.printerSettings,
+        badgeSettings: sourceEvent.badgeSettings,
+        tempStaffSettings: sourceEvent.tempStaffSettings,
+        syncSettings: sourceEvent.syncSettings,
+        kioskPin: sourceEvent.kioskPin,
+        configStatus: 'configured',
+        // Reset integration-specific fields
+        integrationId: null,
+        externalEventId: null,
       });
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to load kiosk launch info" });
-    }
-  });
 
-  app.get("/api/kiosk/:customerId/events", async (req, res) => {
-    try {
-      const events = await storage.getEvents(req.params.customerId);
-      const minimalEvents = events.map(e => ({
-        id: e.id,
-        name: e.name,
-        customerId: e.customerId,
-        startDate: e.startDate,
-        endDate: e.endDate,
-        status: e.status,
-      }));
-      res.json(minimalEvents);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to load events" });
-    }
-  });
-
-  app.post("/api/kiosk/:eventId/search", async (req, res) => {
-    try {
-      const { pin, query } = req.body;
-      if (!pin || !query || typeof query !== 'string') {
-        return res.status(400).json({ error: "PIN and search query are required" });
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const attendees = await storage.getAttendees(event.id);
-      const searchLower = query.toLowerCase().trim();
-
-      const exactMatches = attendees.filter(a =>
-        a.id === query ||
-        a.externalId === query ||
-        a.email?.toLowerCase() === searchLower
-      );
-
-      const matches = exactMatches.length > 0 ? exactMatches : attendees.filter(a =>
-        `${a.firstName} ${a.lastName}`.toLowerCase().includes(searchLower) ||
-        a.firstName?.toLowerCase() === searchLower ||
-        a.lastName?.toLowerCase() === searchLower
-      );
-
-      if (matches.length === 0) {
-        return res.json({ found: false, attendee: null, multipleMatches: false });
-      }
-
-      if (matches.length === 1) {
-        const a = matches[0];
-        return res.json({
-          found: true,
-          attendee: {
-            id: a.id, firstName: a.firstName, lastName: a.lastName,
-            email: a.email, company: a.company, title: a.title,
-            participantType: a.participantType, checkedIn: a.checkedIn,
-            checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
-            externalId: a.externalId,
-          },
-          multipleMatches: false,
+      // Copy badge template overrides
+      const overrides = await storage.getEventBadgeTemplateOverrides(sourceEvent.id);
+      for (const override of overrides) {
+        await storage.createEventBadgeTemplateOverride({
+          eventId: newEvent.id,
+          participantType: override.participantType,
+          badgeTemplateId: override.badgeTemplateId,
+          priority: override.priority,
         });
       }
 
-      return res.json({
-        found: false,
-        attendee: null,
-        multipleMatches: true,
-        matchCount: matches.length,
-        requiresVerification: true,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in kiosk search");
-      res.status(500).json({ error: "Search failed" });
-    }
-  });
+      // Copy workflow config + steps + questions + disclaimers
+      const workflowConfig = await storage.getEventWorkflowConfig(sourceEvent.id);
+      if (workflowConfig) {
+        const newConfig = await storage.createEventWorkflowConfig({
+          eventId: newEvent.id,
+          enabled: workflowConfig.enabled,
+          enabledForStaff: workflowConfig.enabledForStaff,
+          enabledForKiosk: workflowConfig.enabledForKiosk,
+        });
 
-  app.post("/api/kiosk/:eventId/verify", async (req, res) => {
-    try {
-      const { pin, query, email } = req.body;
-      if (!pin || !query || !email) {
-        return res.status(400).json({ error: "PIN, search query, and email are required" });
+        const steps = await storage.getEventWorkflowSteps(sourceEvent.id);
+        for (const step of steps) {
+          const newStep = await storage.createEventWorkflowStep({
+            eventId: newEvent.id,
+            stepType: step.stepType,
+            position: step.position,
+            enabled: step.enabled,
+            config: step.config,
+          });
+
+          // Copy buyer questions for this step
+          const questions = await storage.getEventBuyerQuestions(step.id);
+          for (const q of questions) {
+            await storage.createEventBuyerQuestion({
+              eventId: newEvent.id,
+              stepId: newStep.id,
+              questionText: q.questionText,
+              questionType: q.questionType,
+              required: q.required,
+              position: q.position,
+              options: q.options || [],
+              placeholder: q.placeholder,
+            });
+          }
+
+          // Copy disclaimer for this step
+          const disclaimer = await storage.getEventDisclaimer(step.id);
+          if (disclaimer) {
+            await storage.createEventDisclaimer({
+              eventId: newEvent.id,
+              stepId: newStep.id,
+              title: disclaimer.title,
+              disclaimerText: disclaimer.disclaimerText,
+              requireSignature: disclaimer.requireSignature,
+              confirmationText: disclaimer.confirmationText,
+            });
+          }
+        }
       }
 
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const attendees = await storage.getAttendees(event.id);
-      const searchLower = query.toLowerCase().trim();
-      const emailLower = email.toLowerCase().trim();
-
-      const nameMatches = attendees.filter(a =>
-        `${a.firstName} ${a.lastName}`.toLowerCase().includes(searchLower) ||
-        a.firstName?.toLowerCase() === searchLower ||
-        a.lastName?.toLowerCase() === searchLower
-      );
-
-      const verified = nameMatches.filter(a =>
-        a.email?.toLowerCase() === emailLower
-      );
-
-      if (verified.length === 1) {
-        const a = verified[0];
-        return res.json({
-          found: true,
-          attendee: {
-            id: a.id, firstName: a.firstName, lastName: a.lastName,
-            email: a.email, company: a.company, title: a.title,
-            participantType: a.participantType, checkedIn: a.checkedIn,
-            checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
-            externalId: a.externalId,
-          },
+      // Copy notification rules
+      const notificationRules = await storage.getEventNotificationRules(sourceEvent.id);
+      for (const rule of notificationRules) {
+        await storage.createEventNotificationRule({
+          customerId: sourceEvent.customerId,
+          eventId: newEvent.id,
+          triggerEvent: rule.triggerEvent,
+          participantTypeFilter: rule.participantTypeFilter,
+          nameFilter: rule.nameFilter,
+          webhookEnabled: rule.webhookEnabled,
+          webhookUrl: rule.webhookUrl,
+          webhookMethod: rule.webhookMethod,
+          webhookHeaders: rule.webhookHeaders,
+          customPayload: rule.customPayload,
+          smsEnabled: rule.smsEnabled,
+          smsRecipients: rule.smsRecipients,
+          emailEnabled: rule.emailEnabled,
+          emailRecipients: rule.emailRecipients,
         });
       }
 
-      return res.json({
-        found: false,
-        attendee: null,
-        message: "Could not verify your identity. Please see a staff member for assistance.",
-      });
+      logger.info({ sourceEventId: sourceEvent.id, newEventId: newEvent.id }, "Event copied successfully");
+      res.status(201).json(newEvent);
     } catch (error) {
-      logger.error({ err: error }, "Error in kiosk verify");
-      res.status(500).json({ error: "Verification failed" });
+      logger.error({ err: error }, "Error copying event");
+      res.status(500).json({ error: "Failed to copy event" });
     }
   });
 
-  app.post("/api/kiosk/:eventId/checkin", async (req, res) => {
-    try {
-      const { pin, attendeeId } = req.body;
-      if (!pin || !attendeeId) {
-        return res.status(400).json({ error: "PIN and attendeeId are required" });
-      }
+  // Kiosk Public Endpoints — extracted to routes/kiosk.ts
 
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      if (attendee.checkedIn) {
-        return res.json({
-          success: true,
-          alreadyCheckedIn: true,
-          attendee: {
-            id: attendee.id, firstName: attendee.firstName, lastName: attendee.lastName,
-            email: attendee.email, company: attendee.company, title: attendee.title,
-            participantType: attendee.participantType, checkedIn: attendee.checkedIn,
-            checkedInAt: attendee.checkedInAt, badgePrinted: attendee.badgePrinted,
-            externalId: attendee.externalId,
-          },
-        });
-      }
-
-      const updated = await storage.updateAttendee(attendeeId, {
-        checkedIn: true,
-        checkedInAt: new Date(),
-      });
-
-      res.json({
-        success: true,
-        alreadyCheckedIn: false,
-        attendee: {
-          id: updated.id, firstName: updated.firstName, lastName: updated.lastName,
-          email: updated.email, company: updated.company, title: updated.title,
-          participantType: updated.participantType, checkedIn: updated.checkedIn,
-          checkedInAt: updated.checkedInAt, badgePrinted: updated.badgePrinted,
-          externalId: updated.externalId,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in kiosk check-in");
-      res.status(500).json({ error: "Check-in failed" });
-    }
-  });
-
-  // Group check-in: lookup group by order code (kiosk - PIN required)
-  app.post("/api/kiosk/:eventId/group-lookup", async (req, res) => {
-    try {
-      const { pin, orderCode } = req.body;
-      if (!pin || !orderCode) {
-        return res.status(400).json({ error: "PIN and orderCode are required" });
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const allAttendees = await storage.getAttendees(event.id);
-      const members = allAttendees.filter((a: any) => a.orderCode === orderCode);
-
-      if (members.length === 0) {
-        return res.json({ found: false, members: [], primaryId: null });
-      }
-
-      const primary = members.find((a: any) => a.externalId === orderCode);
-      const primaryId = primary?.id || members[0].id;
-
-      res.json({
-        found: true,
-        members: members.map((a: any) => ({
-          id: a.id, firstName: a.firstName, lastName: a.lastName,
-          email: a.email, company: a.company, title: a.title,
-          participantType: a.participantType, checkedIn: a.checkedIn,
-          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
-          externalId: a.externalId, orderCode: a.orderCode,
-        })),
-        primaryId,
-        checkedInCount: members.filter((a: any) => a.checkedIn).length,
-        totalCount: members.length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in group lookup");
-      res.status(500).json({ error: "Group lookup failed" });
-    }
-  });
-
-  // Group check-in: lookup group by order code (staff - auth required)
-  app.get("/api/events/:eventId/group/:orderCode", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const allAttendees = await storage.getAttendees(event.id);
-      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
-
-      if (members.length === 0) {
-        return res.json({ found: false, members: [], primaryId: null });
-      }
-
-      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
-      const primaryId = primary?.id || members[0].id;
-
-      res.json({
-        found: true,
-        members,
-        primaryId,
-        checkedInCount: members.filter((a: any) => a.checkedIn).length,
-        totalCount: members.length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in group lookup");
-      res.status(500).json({ error: "Group lookup failed" });
-    }
-  });
-
-  // Group check-in: batch check-in multiple attendees at once
-  app.post("/api/events/:eventId/group-checkin", requireAuth, async (req, res) => {
-    try {
-      const { attendeeIds, orderCode, checkedInBy } = req.body;
-      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
-        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const results = [];
-      const now = new Date();
-
-      for (const attendeeId of attendeeIds) {
-        try {
-          const attendee = await storage.getAttendee(attendeeId);
-          if (!attendee || attendee.eventId !== event.id) {
-            results.push({ attendeeId, success: false, error: "Attendee not found" });
-            continue;
-          }
-          if (attendee.checkedIn) {
-            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
-            continue;
-          }
-          const updated = await storage.updateAttendee(attendeeId, {
-            checkedIn: true,
-            checkedInAt: now,
-          });
-          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
-
-          // Trigger real-time sync if configured
-          try {
-            const integration = await checkinSyncService.getIntegrationForEvent(event);
-            if (integration) {
-              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Group");
-            }
-          } catch (syncErr) {
-            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in group check-in`);
-          }
-        } catch (err) {
-          results.push({ attendeeId, success: false, error: "Check-in failed" });
-        }
-      }
-
-      res.json({
-        success: true,
-        results,
-        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
-        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
-        failed: results.filter(r => !r.success).length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in group check-in");
-      res.status(500).json({ error: "Group check-in failed" });
-    }
-  });
-
-  // Kiosk batch check-in (PIN auth)
-  app.post("/api/kiosk/:eventId/group-checkin", async (req, res) => {
-    try {
-      const { pin, attendeeIds, checkedInBy } = req.body;
-      if (!pin || !Array.isArray(attendeeIds) || attendeeIds.length === 0) {
-        return res.status(400).json({ error: "PIN and attendeeIds are required" });
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const results = [];
-      const now = new Date();
-
-      for (const attendeeId of attendeeIds) {
-        try {
-          const attendee = await storage.getAttendee(attendeeId);
-          if (!attendee || attendee.eventId !== event.id) {
-            results.push({ attendeeId, success: false, error: "Attendee not found" });
-            continue;
-          }
-          if (attendee.checkedIn) {
-            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
-            continue;
-          }
-          const updated = await storage.updateAttendee(attendeeId, {
-            checkedIn: true,
-            checkedInAt: now,
-          });
-          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
-
-          try {
-            const integration = await checkinSyncService.getIntegrationForEvent(event);
-            if (integration) {
-              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Kiosk Group");
-            }
-          } catch (syncErr) {
-            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in kiosk group check-in`);
-          }
-        } catch (err) {
-          results.push({ attendeeId, success: false, error: "Check-in failed" });
-        }
-      }
-
-      res.json({
-        success: true,
-        results,
-        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
-        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
-        failed: results.filter(r => !r.success).length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in kiosk group check-in");
-      res.status(500).json({ error: "Group check-in failed" });
-    }
-  });
-
-  app.post("/api/kiosk/:eventId/walkin", async (req, res) => {
-    try {
-      const { pin, firstName, lastName, email, participantType, company, title } = req.body;
-      if (!pin) {
-        return res.status(400).json({ error: "PIN is required" });
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      if (!event.tempStaffSettings?.allowKioskWalkins) {
-        return res.status(403).json({ error: "Kiosk walk-in registration is not enabled for this event" });
-      }
-
-      const kioskWalkinFlag = await storage.getFeatureFlagByKey('kiosk_walkin_registration');
-      if (!kioskWalkinFlag?.enabled) {
-        return res.status(403).json({ error: "Kiosk walk-in feature is not available" });
-      }
-
-      const config = event.tempStaffSettings.kioskWalkinConfig;
-      const requiredFields = config?.requiredFields || ['firstName', 'lastName', 'email'];
-
-      for (const field of requiredFields) {
-        const value = req.body[field];
-        if (!value || (typeof value === 'string' && !value.trim())) {
-          return res.status(400).json({ error: `${field} is required` });
-        }
-      }
-
-      if (!firstName?.trim() || !lastName?.trim()) {
-        return res.status(400).json({ error: "First name and last name are always required" });
-      }
-
-      if (email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email.trim())) {
-          return res.status(400).json({ error: "Invalid email address" });
-        }
-      }
-
-      const effectiveType = participantType?.trim() || config?.defaultType || 'Walk-in';
-
-      const sanitizedData = sanitizeAttendeeData({
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        email: email ? email.trim().toLowerCase() : null,
-        company: (typeof company === 'string' ? company.trim() : null) || null,
-        title: (typeof title === 'string' ? title.trim() : null) || null,
-        participantType: effectiveType,
-      });
-
-      const attendee = await storage.createAttendee({
-        eventId: event.id,
-        firstName: sanitizedData.firstName,
-        lastName: sanitizedData.lastName,
-        email: sanitizedData.email,
-        company: sanitizedData.company,
-        title: sanitizedData.title,
-        participantType: sanitizedData.participantType,
-        registrationStatus: "Registered",
-      });
-
-      const updated = await storage.updateAttendee(attendee.id, {
-        checkedIn: true,
-        checkedInAt: new Date(),
-      });
-
-      if (updated) {
-        const integration = await checkinSyncService.getIntegrationForEvent(event);
-        if (integration) {
-          void checkinSyncService.sendCheckinSync(updated, event, integration, "Kiosk")
-            .then(result => {
-              if (!result.success) {
-                logger.warn({ err: result.error }, 'Kiosk walk-in sync failed');
-              }
-            })
-            .catch(err => logger.error({ err }, 'Kiosk walk-in sync error'));
-        }
-      }
-
-      res.status(201).json({
-        success: true,
-        attendee: {
-          id: updated.id, firstName: updated.firstName, lastName: updated.lastName,
-          email: updated.email, company: updated.company, title: updated.title,
-          participantType: updated.participantType, checkedIn: updated.checkedIn,
-          checkedInAt: updated.checkedInAt, badgePrinted: updated.badgePrinted,
-          externalId: updated.externalId,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in kiosk walk-in registration");
-      res.status(500).json({ error: "Walk-in registration failed" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/badge-templates", async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const templates = await storage.getBadgeTemplates(event.customerId);
-      res.json(templates);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch badge templates" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/template-mappings", async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const overrides = await storage.getEventBadgeTemplateOverrides(req.params.eventId);
-      const overrideMap = new Map(overrides.map(o => [o.participantType, o]));
-      const templates = await storage.getBadgeTemplates(event.customerId);
-      const templateMap = new Map(templates.map(t => [t.id, t]));
-      const actualTypes = await storage.getDistinctParticipantTypes(req.params.eventId);
-      const standardTypes = ['General', 'VIP', 'Speaker', 'Sponsor', 'Staff', 'Press', 'Media', 'Exhibitor'];
-      const participantTypes = [...new Set([...actualTypes, ...standardTypes])];
-      const mappingsObject: Record<string, { templateId: string | null; templateName: string | null; resolutionPath: string; }> = {};
-      for (const type of participantTypes) {
-        const result = await badgeTemplateResolver.resolveTemplateForParticipantType(req.params.eventId, type);
-        mappingsObject[type] = {
-          templateId: result.template?.id || null,
-          templateName: result.template?.name || null,
-          resolutionPath: result.resolutionPath,
-        };
-      }
-      res.json(mappingsObject);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch template mappings" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/sessions", async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const sessions = await storage.getSessions(req.params.eventId);
-      res.json(sessions);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch sessions" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/sessions/:sessionId", async (req, res) => {
-    try {
-      const session = await storage.getSession(req.params.sessionId);
-      if (!session || session.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-      res.json(session);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch session" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/sessions/:sessionId/checkins", async (req, res) => {
-    try {
-      const session = await storage.getSession(req.params.sessionId);
-      if (!session || session.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-      const checkins = await storage.getSessionCheckins(req.params.sessionId);
-      res.json(checkins);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch check-ins" });
-    }
-  });
-
-  app.get("/api/kiosk/:eventId/sessions/:sessionId/registrations", async (req, res) => {
-    try {
-      const session = await storage.getSession(req.params.sessionId);
-      if (!session || session.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-      const registrations = await storage.getSessionRegistrations(req.params.sessionId);
-      res.json(registrations);
-    } catch (error: any) {
-      res.status(500).json({ error: "Failed to fetch registrations" });
-    }
-  });
-
-  app.post("/api/kiosk/:eventId/sessions/:sessionId/checkin", async (req, res) => {
-    try {
-      const { pin, attendeeId, source } = req.body;
-      if (!pin || !attendeeId) {
-        return res.status(400).json({ error: "PIN and attendeeId are required" });
-      }
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const session = await storage.getSession(req.params.sessionId);
-      if (!session || session.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-      if (session.restrictToRegistered) {
-        const registration = await storage.getSessionRegistrationByAttendee(req.params.sessionId, attendeeId);
-        if (!registration || registration.status !== "registered") {
-          return res.status(403).json({
-            error: "This session is restricted to pre-registered attendees only",
-            isRegistered: !!registration,
-            registrationStatus: registration?.status,
-          });
-        }
-      }
-      const isCheckedIn = await storage.isAttendeeCheckedIntoSession(req.params.sessionId, attendeeId);
-      if (isCheckedIn) {
-        return res.status(409).json({ error: "Attendee is already checked in", alreadyCheckedIn: true });
-      }
-      const checkin = await storage.createSessionCheckin({
-        sessionId: req.params.sessionId,
-        attendeeId,
-        action: "checkin",
-        source: source || "kiosk",
-      });
-      const integration = await checkinSyncService.getIntegrationForEvent(event);
-      if (integration) {
-        void checkinSyncService.sendSessionCheckinSync(attendee, session, event, integration)
-          .catch(err => logger.error({ err }, 'Error'));
-      }
-      res.status(201).json({
-        ...checkin,
-        attendee: { id: attendee.id, firstName: attendee.firstName, lastName: attendee.lastName, company: attendee.company },
-        session: { id: session.id, name: session.name, location: session.location },
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error in kiosk session check-in");
-      res.status(400).json({ error: "Failed to check in" });
-    }
-  });
-
-  app.post("/api/kiosk/:eventId/sessions/:sessionId/checkout", async (req, res) => {
-    try {
-      const { pin, attendeeId, source } = req.body;
-      if (!pin || !attendeeId) {
-        return res.status(400).json({ error: "PIN and attendeeId are required" });
-      }
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
-      if (!validateKioskPin(event.kioskPin, pin, req.params.eventId, clientIp, res)) return;
-
-      const session = await storage.getSession(req.params.sessionId);
-      if (!session || session.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-      const isCheckedIn = await storage.isAttendeeCheckedIntoSession(req.params.sessionId, attendeeId);
-      if (!isCheckedIn) {
-        return res.status(409).json({ error: "Attendee is not checked in" });
-      }
-      const checkout = await storage.createSessionCheckin({
-        sessionId: req.params.sessionId,
-        attendeeId,
-        action: "checkout",
-        source: source || "kiosk",
-      });
-      res.status(201).json(checkout);
-    } catch (error: any) {
-      logger.error({ err: error }, "Error in kiosk session checkout");
-      res.status(400).json({ error: "Failed to check out" });
-    }
-  });
 
   // Get single event (tenant-scoped)
   app.get("/api/events/:id", requireAuth, async (req, res) => {
@@ -3430,7 +2814,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } : null;
       
       // Capture selected statuses from the source event
-      const eventSelectedStatuses = (event.syncSettings as any)?.selectedStatuses || null;
+      const eventSelectedStatuses = (event.syncSettings)?.selectedStatuses || null;
 
       const template = await storage.createEventConfigurationTemplate({
         customerId: event.customerId,
@@ -3561,7 +2945,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         defaultEndTime.setDate(defaultEndTime.getDate() + 1);
         defaultEndTime.setHours(23, 59, 59, 999);
         
-        const manualStatusesOk = !!(event.syncSettings as any)?.statusesConfigured;
+        const manualStatusesOk = !!(event.syncSettings)?.statusesConfigured;
         await storage.updateEvent(eventId, {
           configStatus: manualStatusesOk ? 'configured' : 'unconfigured',
           tempStaffSettings: {
@@ -3765,7 +3149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Apply selected statuses from template/source if available
       if (config.selectedStatuses && config.selectedStatuses.length > 0) {
-        const currentSyncSettings = (event.syncSettings as any) || {};
+        const currentSyncSettings = (event.syncSettings) || {};
         await storage.updateEvent(eventId, {
           syncSettings: {
             ...currentSyncSettings,
@@ -4933,1892 +4317,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =====================
-  // Integration Connection Routes (OAuth2 and API Key management)
-  // =====================
 
-  // Get connection status for an integration
-  app.get("/api/integrations/:integrationId/connection", requireAuth, async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-      
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
+  // Integration Connection + Event Sync Routes — extracted to routes/integration-connections.ts
 
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection) {
-        return res.json({ 
-          integrationId,
-          connectionStatus: "not_configured",
-          authMethod: integration.authType
-        });
-      }
-
-      res.json({
-        id: connection.id,
-        integrationId: connection.integrationId,
-        authMethod: connection.authMethod,
-        connectionStatus: connection.connectionStatus,
-        grantedScopes: connection.grantedScopes,
-        lastValidatedAt: connection.lastValidatedAt,
-        lastSuccessfulCallAt: connection.lastSuccessfulCallAt,
-        consecutiveFailures: connection.consecutiveFailures,
-        lastErrorMessage: connection.lastErrorMessage,
-        connectedAt: connection.connectedAt,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching connection status");
-      res.status(500).json({ error: "Failed to fetch connection status" });
-    }
-  });
-
-  // Start OAuth2 authorization flow
-  app.post("/api/integrations/:integrationId/oauth/start", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-      const { redirectUri } = req.body;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const provider = await storage.getIntegrationProvider(integration.providerId);
-      if (!provider || !provider.oauth2Config) {
-        return res.status(400).json({ error: "Provider does not support OAuth2" });
-      }
-
-      const state = generateState();
-      const codeVerifier = generatePKCEVerifier();
-      const codeChallenge = generatePKCEChallenge(codeVerifier);
-
-      let connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (connection) {
-        await storage.updateIntegrationConnection(connection.id, {
-          oauth2State: state,
-          pkceCodeVerifier: codeVerifier,
-          connectionStatus: "connecting",
-        });
-      } else {
-        connection = await storage.createIntegrationConnection({
-          integrationId,
-          authMethod: "oauth2",
-          connectionStatus: "connecting",
-          oauth2State: state,
-          pkceCodeVerifier: codeVerifier,
-        });
-      }
-
-      const oauth2Config = provider.oauth2Config;
-      const clientId = process.env[`${integration.providerId.toUpperCase()}_CLIENT_ID`] || "";
-      
-      const authUrl = await buildAuthorizationUrl(
-        {
-          clientId,
-          authorizationUrl: oauth2Config.authorizationUrl!,
-          tokenUrl: oauth2Config.tokenUrl!,
-          scope: oauth2Config.scope,
-          redirectUri: redirectUri || `${req.protocol}://${req.get('host')}/api/integrations/oauth/callback`,
-        },
-        state,
-        codeChallenge
-      );
-
-      res.json({ 
-        authorizationUrl: authUrl,
-        state,
-        connectionId: connection.id
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error starting OAuth flow");
-      res.status(500).json({ error: "Failed to start OAuth authorization" });
-    }
-  });
-
-  // OAuth2 callback handler
-  app.get("/api/integrations/oauth/callback", async (req, res) => {
-    try {
-      const { code, state, error: oauthError, error_description } = req.query;
-
-      if (oauthError) {
-        return res.status(400).send(`
-          <html><body>
-            <h1>Authorization Failed</h1>
-            <p>${oauthError}: ${error_description || 'Unknown error'}</p>
-            <script>window.opener?.postMessage({ type: 'oauth_error', error: '${oauthError}' }, '*'); window.close();</script>
-          </body></html>
-        `);
-      }
-
-      if (!code || !state) {
-        return res.status(400).json({ error: "Missing code or state parameter" });
-      }
-
-      const customers = await storage.getCustomers();
-      let match: { connection: any; integration: any; provider: any } | null = null;
-
-      for (const customer of customers) {
-        if (match) break;
-        const integrations = await storage.getCustomerIntegrations(customer.id);
-        for (const integration of integrations) {
-          const conn = await storage.getIntegrationConnectionByIntegration(integration.id);
-          if (conn && conn.oauth2State === state) {
-            const provider = await storage.getIntegrationProvider(integration.providerId);
-            if (provider) {
-              match = { connection: conn, integration, provider };
-              break;
-            }
-          }
-        }
-      }
-
-      if (!match) {
-        return res.status(400).send(`
-          <html><body>
-            <h1>Authorization Failed</h1>
-            <p>Invalid or expired state parameter</p>
-            <script>window.opener?.postMessage({ type: 'oauth_error', error: 'invalid_state' }, '*'); window.close();</script>
-          </body></html>
-        `);
-      }
-
-      const { connection, integration, provider } = match;
-      
-      if (!provider.oauth2Config) {
-        return res.status(400).json({ error: "Provider OAuth2 config not found" });
-      }
-
-      if (!connection.pkceCodeVerifier) {
-        logger.error({ err: connection.id }, "PKCE code verifier not found for connection");
-        return res.status(400).send(`
-          <html><body>
-            <h1>Authorization Failed</h1>
-            <p>PKCE verification failed - missing code verifier</p>
-            <script>window.opener?.postMessage({ type: 'oauth_error', error: 'pkce_error' }, '*'); window.close();</script>
-          </body></html>
-        `);
-      }
-
-      const clientId = process.env[`${integration.providerId.toUpperCase()}_CLIENT_ID`] || "";
-      const clientSecret = process.env[`${integration.providerId.toUpperCase()}_CLIENT_SECRET`] || "";
-      const redirectUri = `${req.protocol}://${req.get('host')}/api/integrations/oauth/callback`;
-
-      const tokens = await exchangeCodeForTokens(
-        {
-          clientId,
-          clientSecret,
-          authorizationUrl: provider.oauth2Config.authorizationUrl!,
-          tokenUrl: provider.oauth2Config.tokenUrl!,
-          redirectUri,
-        },
-        code as string,
-        connection.pkceCodeVerifier
-      );
-
-      const accessTokenEncrypted = encryptCredential(tokens.access_token);
-      await storage.createStoredCredential({
-        connectionId: connection.id,
-        credentialType: "access_token",
-        encryptedValue: accessTokenEncrypted.encryptedValue,
-        encryptionKeyId: accessTokenEncrypted.encryptionKeyId,
-        iv: accessTokenEncrypted.iv,
-        authTag: accessTokenEncrypted.authTag,
-        maskedValue: maskCredential(tokens.access_token),
-        tokenType: tokens.token_type,
-        scope: tokens.scope,
-        expiresAt: tokens.expires_in ? calculateTokenExpiry(tokens.expires_in) : null,
-      });
-
-      if (tokens.refresh_token) {
-        const refreshTokenEncrypted = encryptCredential(tokens.refresh_token);
-        await storage.createStoredCredential({
-          connectionId: connection.id,
-          credentialType: "refresh_token",
-          encryptedValue: refreshTokenEncrypted.encryptedValue,
-          encryptionKeyId: refreshTokenEncrypted.encryptionKeyId,
-          iv: refreshTokenEncrypted.iv,
-          authTag: refreshTokenEncrypted.authTag,
-          maskedValue: maskCredential(tokens.refresh_token),
-        });
-      }
-
-      await storage.updateIntegrationConnection(connection.id, {
-        connectionStatus: "connected",
-        oauth2State: null,
-        pkceCodeVerifier: null,
-        grantedScopes: tokens.scope ? tokens.scope.split(" ") : null,
-        connectedAt: new Date(),
-        lastValidatedAt: new Date(),
-      });
-
-      res.send(`
-        <html><body>
-          <h1>Authorization Successful</h1>
-          <p>You can close this window.</p>
-          <script>window.opener?.postMessage({ type: 'oauth_success', integrationId: '${integration.id}' }, '*'); window.close();</script>
-        </body></html>
-      `);
-    } catch (error) {
-      logger.error({ err: error }, "Error in OAuth callback");
-      res.status(500).send(`
-        <html><body>
-          <h1>Authorization Failed</h1>
-          <p>An error occurred during authorization</p>
-          <script>window.opener?.postMessage({ type: 'oauth_error', error: 'server_error' }, '*'); window.close();</script>
-        </body></html>
-      `);
-    }
-  });
-
-  // Submit API key/token credentials
-  app.post("/api/integrations/:integrationId/credentials", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-      const { credentialType, value } = req.body;
-
-      if (!value || !credentialType) {
-        return res.status(400).json({ error: "credentialType and value are required" });
-      }
-
-      if (!["api_key", "bearer_token", "client_secret", "password", "basic_username", "basic_password"].includes(credentialType)) {
-        return res.status(400).json({ error: "Invalid credential type" });
-      }
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      let connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection) {
-        let authMethod: "api_key" | "bearer_token" | "basic" = "bearer_token";
-        if (credentialType === "api_key") authMethod = "api_key";
-        else if (credentialType === "basic_username" || credentialType === "basic_password") authMethod = "basic";
-        
-        connection = await storage.createIntegrationConnection({
-          integrationId,
-          authMethod,
-          connectionStatus: "connecting",
-        });
-      }
-
-      const existingCredential = await storage.getStoredCredentialByType(connection.id, credentialType);
-      if (existingCredential) {
-        await storage.updateStoredCredential(existingCredential.id, {
-          isValid: false,
-          invalidatedAt: new Date(),
-          invalidationReason: "replaced",
-        });
-      }
-
-      const encrypted = encryptCredential(value);
-      await storage.createStoredCredential({
-        connectionId: connection.id,
-        credentialType,
-        encryptedValue: encrypted.encryptedValue,
-        encryptionKeyId: encrypted.encryptionKeyId,
-        iv: encrypted.iv,
-        authTag: encrypted.authTag,
-        maskedValue: maskCredential(value),
-      });
-
-      // Mark as pending_validation - user must test connection to verify credentials work
-      await storage.updateIntegrationConnection(connection.id, {
-        connectionStatus: "pending_validation",
-      });
-
-      res.json({ 
-        success: true, 
-        connectionId: connection.id,
-        maskedValue: maskCredential(value),
-        message: "Credentials saved. Please test the connection to verify they work."
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error storing credentials");
-      res.status(500).json({ error: "Failed to store credentials" });
-    }
-  });
-
-  // Copy credentials from another integration (reuse same credentials with different account code)
-  app.post("/api/integrations/:integrationId/copy-credentials", requireAuth, async (req, res) => {
-    try {
-      const targetIntegrationId = req.params.integrationId;
-      const { sourceIntegrationId } = req.body;
-
-      if (!sourceIntegrationId) {
-        return res.status(400).json({ error: "sourceIntegrationId is required" });
-      }
-
-      // Get both integrations
-      const targetIntegration = await storage.getCustomerIntegration(targetIntegrationId);
-      const sourceIntegration = await storage.getCustomerIntegration(sourceIntegrationId);
-
-      if (!targetIntegration) {
-        return res.status(404).json({ error: "Target integration not found" });
-      }
-      if (!sourceIntegration) {
-        return res.status(404).json({ error: "Source integration not found" });
-      }
-
-      // Verify same customer owns both integrations
-      if (targetIntegration.customerId !== sourceIntegration.customerId) {
-        return res.status(403).json({ error: "Cannot copy credentials between different customers" });
-      }
-
-      // Get source connection and credentials
-      const sourceConnection = await storage.getIntegrationConnectionByIntegration(sourceIntegrationId);
-      if (!sourceConnection) {
-        return res.status(400).json({ error: "Source integration has no connection" });
-      }
-
-      const sourceCredentials = await storage.getStoredCredentials(sourceConnection.id);
-      if (!sourceCredentials || sourceCredentials.length === 0) {
-        return res.status(400).json({ error: "Source integration has no credentials to copy" });
-      }
-
-      // Create or get target connection
-      let targetConnection = await storage.getIntegrationConnectionByIntegration(targetIntegrationId);
-      if (!targetConnection) {
-        targetConnection = await storage.createIntegrationConnection({
-          integrationId: targetIntegrationId,
-          authMethod: sourceConnection.authMethod,
-          connectionStatus: "connecting",
-        });
-      }
-
-      // Copy each credential
-      let copiedCount = 0;
-      for (const credential of sourceCredentials) {
-        if (!credential.isValid) continue;
-
-        // Check if target already has this credential type
-        const existing = await storage.getStoredCredentialByType(targetConnection.id, credential.credentialType);
-        if (existing) {
-          await storage.updateStoredCredential(existing.id, {
-            isValid: false,
-            invalidatedAt: new Date(),
-            invalidationReason: "replaced",
-          });
-        }
-
-        // Copy the encrypted credential directly (same encryption, just new connection)
-        await storage.createStoredCredential({
-          connectionId: targetConnection.id,
-          credentialType: credential.credentialType,
-          encryptedValue: credential.encryptedValue,
-          encryptionKeyId: credential.encryptionKeyId,
-          iv: credential.iv,
-          authTag: credential.authTag,
-          maskedValue: credential.maskedValue,
-        });
-        copiedCount++;
-      }
-
-      // Mark target as pending validation
-      await storage.updateIntegrationConnection(targetConnection.id, {
-        connectionStatus: "pending_validation",
-        authMethod: sourceConnection.authMethod,
-      });
-
-      res.json({ 
-        success: true, 
-        copiedCount,
-        message: `Copied ${copiedCount} credential(s). Please test the connection to verify they work with the new account code.`
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error copying credentials");
-      res.status(500).json({ error: "Failed to copy credentials" });
-    }
-  });
-
-  // Disconnect integration
-  app.post("/api/integrations/:integrationId/disconnect", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection) {
-        return res.json({ success: true, message: "No connection found" });
-      }
-
-      await storage.deleteStoredCredentialsByConnection(connection.id);
-
-      await storage.updateIntegrationConnection(connection.id, {
-        connectionStatus: "disconnected",
-        disconnectedAt: new Date(),
-        grantedScopes: null,
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error disconnecting integration");
-      res.status(500).json({ error: "Failed to disconnect integration" });
-    }
-  });
-
-  // Validate connection (test API call)
-  app.post("/api/integrations/:integrationId/validate", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection || connection.connectionStatus !== "connected") {
-        return res.status(400).json({ error: "Integration not connected" });
-      }
-
-      const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
-      const bearerToken = await storage.getStoredCredentialByType(connection.id, "bearer_token");
-      const basicUsername = await storage.getStoredCredentialByType(connection.id, "basic_username");
-      const basicPassword = await storage.getStoredCredentialByType(connection.id, "basic_password");
-      
-      const hasBasicAuth = basicUsername && basicPassword;
-      if (!accessToken && !apiKey && !bearerToken && !hasBasicAuth) {
-        return res.status(400).json({ error: "No credentials found" });
-      }
-
-      await storage.updateIntegrationConnection(connection.id, {
-        lastValidatedAt: new Date(),
-        lastSuccessfulCallAt: new Date(),
-        consecutiveFailures: 0,
-      });
-
-      res.json({ 
-        valid: true, 
-        lastValidatedAt: new Date().toISOString(),
-        hasAccessToken: !!accessToken,
-        hasApiKey: !!apiKey,
-        hasBearerToken: !!bearerToken,
-        hasBasicAuth: hasBasicAuth,
-        tokenExpiry: accessToken?.expiresAt
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error validating connection");
-      res.status(500).json({ error: "Failed to validate connection" });
-    }
-  });
-
-  // Test connection with actual API call to testEndpointPath
-  app.post("/api/integrations/:integrationId/test-connection", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    const startTime = Date.now();
-    try {
-      const integrationId = req.params.integrationId;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Integration not found",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Check if test endpoint is configured
-      if (!integration.testEndpointPath) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No test endpoint configured. Please set a test endpoint path in the integration settings.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No connection found. Please connect credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Get credentials - check all possible types
-      const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
-      const bearerToken = await storage.getStoredCredentialByType(connection.id, "bearer_token");
-      const basicUsername = await storage.getStoredCredentialByType(connection.id, "basic_username");
-      const basicPassword = await storage.getStoredCredentialByType(connection.id, "basic_password");
-      
-      const hasBasicAuth = basicUsername && basicPassword;
-      const hasAnyCredential = accessToken || apiKey || bearerToken || hasBasicAuth;
-      
-      if (!hasAnyCredential) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No credentials found. Please configure credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Build the test URL - handle case where full URL is entered in path field
-      let testEndpointPath = integration.testEndpointPath;
-      try {
-        const pathUrl = new URL(testEndpointPath);
-        // If it parsed as a URL, extract just the pathname
-        testEndpointPath = pathUrl.pathname + pathUrl.search;
-        logger.info(`Extracted path from full URL: ${testEndpointPath}`);
-      } catch {
-        // Not a full URL, use as-is
-      }
-      
-      // Substitute {accountCode} or {{accountCode}} variable if present
-      if (integration.accountCode) {
-        testEndpointPath = testEndpointPath.replace(/\{\{accountCode\}\}/g, integration.accountCode);
-        testEndpointPath = testEndpointPath.replace(/\{accountCode\}/g, integration.accountCode);
-      }
-      
-      const testUrl = `${integration.baseUrl.replace(/\/$/, '')}${testEndpointPath.startsWith('/') ? '' : '/'}${testEndpointPath}`;
-      logger.info(`Testing URL: ${testUrl}`);
-
-      // Build headers with auth
-      const headers: Record<string, string> = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      };
-
-      if (accessToken) {
-        const token = decryptCredential({
-          encryptedValue: accessToken.encryptedValue,
-          iv: accessToken.iv,
-          authTag: accessToken.authTag,
-          encryptionKeyId: accessToken.encryptionKeyId,
-        });
-        headers['Authorization'] = `Bearer ${token}`;
-      } else if (bearerToken) {
-        const token = decryptCredential({
-          encryptedValue: bearerToken.encryptedValue,
-          iv: bearerToken.iv,
-          authTag: bearerToken.authTag,
-          encryptionKeyId: bearerToken.encryptionKeyId,
-        });
-        headers['Authorization'] = `Bearer ${token}`;
-      } else if (apiKey) {
-        const key = decryptCredential({
-          encryptedValue: apiKey.encryptedValue,
-          iv: apiKey.iv,
-          authTag: apiKey.authTag,
-          encryptionKeyId: apiKey.encryptionKeyId,
-        });
-        headers['Authorization'] = `Bearer ${key}`;
-      } else if (hasBasicAuth) {
-        const username = decryptCredential({
-          encryptedValue: basicUsername.encryptedValue,
-          iv: basicUsername.iv,
-          authTag: basicUsername.authTag,
-          encryptionKeyId: basicUsername.encryptionKeyId,
-        });
-        const password = decryptCredential({
-          encryptedValue: basicPassword.encryptedValue,
-          iv: basicPassword.iv,
-          authTag: basicPassword.authTag,
-          encryptionKeyId: basicPassword.encryptionKeyId,
-        });
-        headers['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-      }
-
-      // Make the test request
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-      try {
-        const response = await fetch(testUrl, {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
-        const latencyMs = Date.now() - startTime;
-
-        if (response.ok) {
-          // Update connection status on success and clear any previous error
-          await storage.updateIntegrationConnection(connection.id, {
-            lastValidatedAt: new Date(),
-            lastSuccessfulCallAt: new Date(),
-            consecutiveFailures: 0,
-            connectionStatus: "connected",
-            lastErrorMessage: null,
-            lastErrorAt: null,
-          });
-
-          return res.json({
-            success: true,
-            statusCode: response.status,
-            message: `Connection successful! API responded with status ${response.status}`,
-            latencyMs,
-          });
-        } else {
-          // Map error codes to user-friendly messages
-          let message = `API returned status ${response.status}`;
-          if (response.status === 401) {
-            message = "Authentication failed. Please check your credentials.";
-          } else if (response.status === 403) {
-            message = "Access denied. Your credentials may not have sufficient permissions.";
-          } else if (response.status === 404) {
-            message = "Test endpoint not found. Please verify the test endpoint path.";
-          } else if (response.status >= 500) {
-            message = "The external API is experiencing issues. Please try again later.";
-          }
-
-          await storage.updateIntegrationConnection(connection.id, {
-            consecutiveFailures: (connection.consecutiveFailures || 0) + 1,
-            lastErrorMessage: message,
-            lastErrorAt: new Date(),
-          });
-
-          return res.json({
-            success: false,
-            statusCode: response.status,
-            message,
-            latencyMs,
-          });
-        }
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        const latencyMs = Date.now() - startTime;
-
-        let message = "Failed to connect to the API";
-        if (fetchError.name === 'AbortError') {
-          message = "Request timed out after 30 seconds";
-        } else if (fetchError.code === 'ENOTFOUND') {
-          message = "Could not resolve host. Please check the base URL.";
-        } else if (fetchError.code === 'ECONNREFUSED') {
-          message = "Connection refused. The API server may be down.";
-        }
-
-        return res.json({
-          success: false,
-          message,
-          latencyMs,
-        });
-      }
-    } catch (error) {
-      logger.error({ err: error }, "Error testing connection");
-      res.status(500).json({ 
-        success: false, 
-        message: "Failed to test connection",
-        latencyMs: Date.now() - startTime 
-      });
-    }
-  });
-
-  // Discover events from external platform (Certain only)
-  app.post("/api/integrations/:integrationId/discover-events", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    const startTime = Date.now();
-    try {
-      const integrationId = req.params.integrationId;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ 
-          success: false, 
-          message: "Integration not found",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Only allow for Certain integrations
-      if (!integration.providerId.startsWith('certain')) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Event discovery is only available for Certain platform integrations",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Check if event list endpoint is configured
-      if (!integration.eventListEndpointPath) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No event list endpoint configured. Please set an event list endpoint path in the integration settings.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection || connection.connectionStatus !== "connected") {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Integration not connected. Please connect credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Get credentials and build auth headers
-      const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
-      const bearerToken = await storage.getStoredCredentialByType(connection.id, "bearer_token");
-      const basicUsername = await storage.getStoredCredentialByType(connection.id, "basic_username");
-      const basicPassword = await storage.getStoredCredentialByType(connection.id, "basic_password");
-      
-      const hasBasicAuth = basicUsername && basicPassword;
-      const hasAnyCredential = accessToken || apiKey || bearerToken || hasBasicAuth;
-      
-      if (!hasAnyCredential) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No credentials found. Please configure credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Build auth headers
-      const authHeaders: Record<string, string> = {};
-
-      if (accessToken) {
-        const token = decryptCredential({
-          encryptedValue: accessToken.encryptedValue,
-          iv: accessToken.iv,
-          authTag: accessToken.authTag,
-          encryptionKeyId: accessToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (bearerToken) {
-        const token = decryptCredential({
-          encryptedValue: bearerToken.encryptedValue,
-          iv: bearerToken.iv,
-          authTag: bearerToken.authTag,
-          encryptionKeyId: bearerToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (apiKey) {
-        const key = decryptCredential({
-          encryptedValue: apiKey.encryptedValue,
-          iv: apiKey.iv,
-          authTag: apiKey.authTag,
-          encryptionKeyId: apiKey.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${key}`;
-      } else if (hasBasicAuth) {
-        const username = decryptCredential({
-          encryptedValue: basicUsername.encryptedValue,
-          iv: basicUsername.iv,
-          authTag: basicUsername.authTag,
-          encryptionKeyId: basicUsername.encryptionKeyId,
-        });
-        const password = decryptCredential({
-          encryptedValue: basicPassword.encryptedValue,
-          iv: basicPassword.iv,
-          authTag: basicPassword.authTag,
-          encryptionKeyId: basicPassword.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-      }
-
-      // Import and call the sync orchestrator
-      const { syncOrchestrator } = await import("./services/sync-orchestrator");
-      
-      const result = await syncOrchestrator.discoverEvents({
-        integration,
-        authHeaders,
-      });
-
-      const latencyMs = Date.now() - startTime;
-
-      const parts = [`Discovered ${result.processedCount} events`];
-      if (result.filteredOutCount > 0) parts.push(`${result.filteredOutCount} filtered out (no "checkmate" tag)`);
-      parts.push(`Created ${result.createdCount} new, updated ${result.skippedCount} existing`);
-      if (result.removedCount > 0) parts.push(`removed ${result.removedCount} untagged`);
-      if (result.errors.length > 0) parts.push(`${result.errors.length} errors`);
-
-      res.json({
-        success: result.success,
-        message: parts.join('. ') + '.',
-        processedCount: result.processedCount,
-        createdCount: result.createdCount,
-        skippedCount: result.skippedCount,
-        removedCount: result.removedCount,
-        filteredOutCount: result.filteredOutCount,
-        errors: result.errors.length > 0 ? result.errors.map(e => e.error) : undefined,
-        latencyMs,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error discovering events");
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || "Failed to discover events",
-        latencyMs: Date.now() - startTime 
-      });
-    }
-  });
-
-  // Full initial sync - runs events, attendees, sessions, and session registrations in sequence
-  app.post("/api/integrations/:integrationId/initial-sync", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    const startTime = Date.now();
-    try {
-      const integrationId = req.params.integrationId;
-      const { delayBetweenStepsMs = 3000 } = req.body;
-
-      // Get the integration
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ success: false, message: "Integration not found" });
-      }
-
-      // Get connection and credentials
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection || connection.connectionStatus !== "connected") {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Integration not connected. Please connect credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Get credentials and build auth headers (same pattern as discover-events)
-      const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
-      const bearerToken = await storage.getStoredCredentialByType(connection.id, "bearer_token");
-      const basicUsername = await storage.getStoredCredentialByType(connection.id, "basic_username");
-      const basicPassword = await storage.getStoredCredentialByType(connection.id, "basic_password");
-      
-      const hasBasicAuth = basicUsername && basicPassword;
-      const hasAnyCredential = accessToken || apiKey || bearerToken || hasBasicAuth;
-      
-      if (!hasAnyCredential) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "No credentials found. Please configure credentials first.",
-          latencyMs: Date.now() - startTime 
-        });
-      }
-
-      // Build auth headers
-      const authHeaders: Record<string, string> = {};
-
-      if (accessToken) {
-        const token = decryptCredential({
-          encryptedValue: accessToken.encryptedValue,
-          iv: accessToken.iv,
-          authTag: accessToken.authTag,
-          encryptionKeyId: accessToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (bearerToken) {
-        const token = decryptCredential({
-          encryptedValue: bearerToken.encryptedValue,
-          iv: bearerToken.iv,
-          authTag: bearerToken.authTag,
-          encryptionKeyId: bearerToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (apiKey) {
-        const key = decryptCredential({
-          encryptedValue: apiKey.encryptedValue,
-          iv: apiKey.iv,
-          authTag: apiKey.authTag,
-          encryptionKeyId: apiKey.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${key}`;
-      } else if (hasBasicAuth) {
-        const username = decryptCredential({
-          encryptedValue: basicUsername.encryptedValue,
-          iv: basicUsername.iv,
-          authTag: basicUsername.authTag,
-          encryptionKeyId: basicUsername.encryptionKeyId,
-        });
-        const password = decryptCredential({
-          encryptedValue: basicPassword.encryptedValue,
-          iv: basicPassword.iv,
-          authTag: basicPassword.authTag,
-          encryptionKeyId: basicPassword.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-      }
-
-      // Import and run the sequential sync
-      const { syncOrchestrator } = await import("./services/sync-orchestrator");
-      
-      const result = await syncOrchestrator.runSequentialSync({
-        integration,
-        customerId: integration.customerId,
-        authHeaders,
-        delayBetweenStepsMs,
-      });
-
-      // Mark initial sync as completed on success
-      if (result.success) {
-        await storage.updateCustomerIntegration(integrationId, {
-          initialSyncCompletedAt: new Date(),
-          lastSync: new Date(),
-        });
-      }
-
-      const latencyMs = Date.now() - startTime;
-      
-      res.json({
-        success: result.success,
-        message: result.success 
-          ? `Initial sync complete. Total records: ${result.totalRecords}` 
-          : 'Initial sync completed with some errors',
-        steps: result.steps,
-        totalRecords: result.totalRecords,
-        durationMs: result.durationMs,
-        latencyMs,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error during initial sync");
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || "Failed to run initial sync",
-        latencyMs: Date.now() - startTime 
-      });
-    }
-  });
-
-  // =====================
-  // Event Sync State Routes
-  // =====================
-
-  // Get sync states for an event
-  app.get("/api/events/:eventId/sync-states", requireAuth, async (req, res) => {
-    try {
-      const eventId = req.params.eventId;
-      const event = await storage.getEvent(eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-      const syncStates = await storage.getEventSyncStates(eventId);
-      res.json(syncStates);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching sync states");
-      res.status(500).json({ error: "Failed to fetch sync states" });
-    }
-  });
-
-  // Initialize sync states for an event (creates states for attendees, sessions, session_registrations)
-  app.post("/api/events/:eventId/sync-states/initialize", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const eventId = req.params.eventId;
-      const event = await storage.getEvent(eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!event.integrationId) {
-        return res.status(400).json({ error: "Event has no integration configured" });
-      }
-
-      const integration = await storage.getCustomerIntegration(event.integrationId);
-      if (!integration) {
-        return res.status(400).json({ error: "Integration not found" });
-      }
-
-      const { syncOrchestrator } = await import("./services/sync-orchestrator");
-      const dataTypes = ['attendees', 'sessions', 'session_registrations'];
-      const createdStates = [];
-
-      for (const dataType of dataTypes) {
-        const existing = await storage.getEventSyncState(eventId, dataType);
-        const syncTemplates = integration.syncTemplates as any;
-        const templateKey = dataType === 'session_registrations' ? 'sessionRegistrations' : dataType;
-        const template = syncTemplates?.[templateKey];
-        
-        let resolvedEndpoint: string | null = null;
-        if (template?.endpointPath) {
-          resolvedEndpoint = syncOrchestrator.buildResolvedEndpoint(
-            template.endpointPath,
-            { accountCode: event.accountCode, eventCode: event.eventCode }
-          );
-        }
-
-        if (!existing) {
-          const state = await storage.createEventSyncState({
-            eventId,
-            integrationId: integration.id,
-            dataType,
-            resolvedEndpoint,
-            syncEnabled: true,
-            syncStatus: 'pending',
-          });
-          createdStates.push(state);
-        } else if (resolvedEndpoint && existing.resolvedEndpoint !== resolvedEndpoint) {
-          await storage.updateEventSyncState(existing.id, { resolvedEndpoint });
-          logger.info(`Updated ${dataType} endpoint: ${existing.resolvedEndpoint} → ${resolvedEndpoint}`);
-        }
-      }
-
-      const allStates = await storage.getEventSyncStates(eventId);
-      res.json({ 
-        message: `Initialized ${createdStates.length} new sync states`,
-        syncStates: allStates 
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error initializing sync states");
-      res.status(500).json({ error: "Failed to initialize sync states" });
-    }
-  });
-
-  // Update sync state for a specific data type
-  app.patch("/api/events/:eventId/sync-states/:dataType", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const { eventId, dataType } = req.params;
-      const state = await storage.getEventSyncState(eventId, dataType);
-      if (!state) {
-        return res.status(404).json({ error: "Sync state not found" });
-      }
-
-      const updateSchema = z.object({
-        syncEnabled: z.boolean().optional(),
-        syncIntervalMinutes: z.number().min(1).optional(),
-        resolvedEndpoint: z.string().optional(),
-      });
-
-      const updates = updateSchema.parse(req.body);
-      const updated = await storage.updateEventSyncState(state.id, updates);
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating sync state");
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
-      }
-      res.status(500).json({ error: "Failed to update sync state" });
-    }
-  });
-
-  // Trigger manual sync for a specific data type
-  app.post("/api/events/:eventId/sync/:dataType", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    const startTime = Date.now();
-    try {
-      const { eventId, dataType } = req.params;
-      
-      if (!['attendees', 'sessions', 'session_registrations'].includes(dataType)) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Invalid data type. Must be one of: attendees, sessions, session_registrations" 
-        });
-      }
-
-      const event = await storage.getEvent(eventId);
-      if (!event) {
-        return res.status(404).json({ success: false, message: "Event not found" });
-      }
-
-      const evtSyncSettings = event.syncSettings as { syncFrozen?: boolean } | null;
-      if (evtSyncSettings?.syncFrozen) {
-        return res.status(423).json({ success: false, message: "Inbound sync is frozen for this event. Unfreeze in event settings to sync." });
-      }
-
-      if (!event.integrationId) {
-        return res.status(400).json({ success: false, message: "Event has no integration configured" });
-      }
-
-      const integration = await storage.getCustomerIntegration(event.integrationId);
-      if (!integration) {
-        return res.status(400).json({ success: false, message: "Integration not found" });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integration.id);
-      if (!connection || connection.connectionStatus !== "connected") {
-        return res.status(400).json({ success: false, message: "Integration not connected" });
-      }
-
-      // Get or create sync state, always re-resolve endpoint from current integration templates
-      const { syncOrchestrator: orchestrator } = await import("./services/sync-orchestrator");
-      const syncTemplates = integration.syncTemplates as any;
-      const templateKey = dataType === 'session_registrations' ? 'sessionRegistrations' : dataType;
-      const template = syncTemplates?.[templateKey];
-      
-      let currentResolvedEndpoint: string | null = null;
-      if (template?.endpointPath) {
-        currentResolvedEndpoint = orchestrator.buildResolvedEndpoint(
-          template.endpointPath,
-          { accountCode: event.accountCode, eventCode: event.eventCode }
-        );
-      }
-
-      let syncState = await storage.getEventSyncState(eventId, dataType);
-      if (!syncState) {
-        syncState = await storage.createEventSyncState({
-          eventId,
-          integrationId: integration.id,
-          dataType,
-          resolvedEndpoint: currentResolvedEndpoint,
-          syncEnabled: true,
-          syncStatus: 'pending',
-        });
-      } else if (currentResolvedEndpoint && syncState.resolvedEndpoint !== currentResolvedEndpoint) {
-        await storage.updateEventSyncState(syncState.id, { resolvedEndpoint: currentResolvedEndpoint });
-        logger.info(`Updated endpoint from integration: ${syncState.resolvedEndpoint} → ${currentResolvedEndpoint}`);
-        syncState = { ...syncState, resolvedEndpoint: currentResolvedEndpoint };
-      }
-
-      if (!syncState.resolvedEndpoint) {
-        return res.status(400).json({ 
-          success: false, 
-          message: `No endpoint configured for ${dataType}. Please configure sync templates in the integration settings.` 
-        });
-      }
-
-      // Mark as syncing
-      await storage.updateEventSyncState(syncState.id, { syncStatus: 'syncing' });
-
-      // Get credentials and build auth headers
-      const accessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      const apiKey = await storage.getStoredCredentialByType(connection.id, "api_key");
-      const bearerToken = await storage.getStoredCredentialByType(connection.id, "bearer_token");
-      const basicUsername = await storage.getStoredCredentialByType(connection.id, "basic_username");
-      const basicPassword = await storage.getStoredCredentialByType(connection.id, "basic_password");
-      
-      const hasBasicAuth = basicUsername && basicPassword;
-      const hasAnyCredential = accessToken || apiKey || bearerToken || hasBasicAuth;
-      
-      if (!hasAnyCredential) {
-        await storage.updateEventSyncState(syncState.id, { 
-          syncStatus: 'error', 
-          lastErrorMessage: 'No credentials found' 
-        });
-        return res.status(400).json({ success: false, message: "No credentials found" });
-      }
-
-      // Build auth headers
-      const authHeaders: Record<string, string> = {};
-      if (accessToken) {
-        const token = decryptCredential({
-          encryptedValue: accessToken.encryptedValue,
-          iv: accessToken.iv,
-          authTag: accessToken.authTag,
-          encryptionKeyId: accessToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (bearerToken) {
-        const token = decryptCredential({
-          encryptedValue: bearerToken.encryptedValue,
-          iv: bearerToken.iv,
-          authTag: bearerToken.authTag,
-          encryptionKeyId: bearerToken.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${token}`;
-      } else if (apiKey) {
-        const key = decryptCredential({
-          encryptedValue: apiKey.encryptedValue,
-          iv: apiKey.iv,
-          authTag: apiKey.authTag,
-          encryptionKeyId: apiKey.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Bearer ${key}`;
-      } else if (hasBasicAuth) {
-        const username = decryptCredential({
-          encryptedValue: basicUsername.encryptedValue,
-          iv: basicUsername.iv,
-          authTag: basicUsername.authTag,
-          encryptionKeyId: basicUsername.encryptionKeyId,
-        });
-        const password = decryptCredential({
-          encryptedValue: basicPassword.encryptedValue,
-          iv: basicPassword.iv,
-          authTag: basicPassword.authTag,
-          encryptionKeyId: basicPassword.encryptionKeyId,
-        });
-        authHeaders['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-      }
-
-      // Build the full URL with lastSyncTimestamp substituted at sync time
-      const { syncOrchestrator: orchestratorForUrl } = await import("./services/sync-orchestrator");
-      const baseUrl = integration.baseUrl.replace(/\/$/, '');
-      
-      // We've already verified resolvedEndpoint is not null above
-      const resolvedEndpoint = syncState.resolvedEndpoint!;
-      
-      // Check if this endpoint requires per-attendee iteration
-      const requiresAttendeeIteration = orchestratorForUrl.templateRequiresAttendeeIteration(
-        resolvedEndpoint
-      );
-      
-      let records: any[] = [];
-      let latencyMs = 0;
-      let apiCallCount = 0;
-      let errorCount = 0;
-      let lastError: string | null = null;
-      
-      if (requiresAttendeeIteration) {
-        // Fetch all attendees for this event
-        const attendees = await storage.getAttendees(eventId);
-        const attendeesWithExternalId = attendees.filter(a => a.externalId);
-        
-        if (attendeesWithExternalId.length === 0) {
-          await storage.updateEventSyncState(syncState.id, { 
-            syncStatus: 'error', 
-            lastErrorMessage: 'No attendees with external IDs found. Sync attendees first.',
-            lastErrorAt: new Date(),
-          });
-          return res.json({
-            success: false,
-            message: 'No attendees with external IDs found. Please sync attendees first before syncing per-attendee data.',
-            latencyMs: Date.now() - startTime,
-          });
-        }
-        
-        logger.info(`Per-attendee sync: processing ${attendeesWithExternalId.length} attendees`);
-        
-        // Make API call for each attendee
-        for (const attendee of attendeesWithExternalId) {
-          const attendeeEndpoint = orchestratorForUrl.prepareEndpointForAttendee(
-            resolvedEndpoint,
-            attendee.externalId
-          );
-          
-          if (!attendeeEndpoint) continue;
-          
-          // Also substitute lastSyncTimestamp
-          const finalEndpoint = orchestratorForUrl.prepareEndpointForSync(
-            attendeeEndpoint,
-            syncState.lastSyncTimestamp
-          );
-          
-          let endpointPath = finalEndpoint;
-          try {
-            const pathUrl = new URL(finalEndpoint);
-            endpointPath = pathUrl.pathname + pathUrl.search;
-          } catch {
-            // Not a full URL, use as-is
-          }
-          endpointPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-          const url = `${baseUrl}${endpointPath}`;
-          
-          try {
-            const callStart = Date.now();
-            const response = await fetch(url, {
-              method: 'GET',
-              headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                ...authHeaders,
-              },
-            });
-            latencyMs += Date.now() - callStart;
-            apiCallCount++;
-            
-            if (!response.ok) {
-              if (response.status === 404) {
-                logger.info(`API returned 404 for attendee ${attendee.externalId} — treating as no data`);
-                continue;
-              }
-              errorCount++;
-              lastError = `API returned ${response.status} for attendee ${attendee.externalId}`;
-              logger.warn(`Error for attendee ${attendee.externalId}: ${response.status}`);
-              continue;
-            }
-            
-            const data = await response.json();
-            
-            // Extract records from this response
-            let attendeeRecords: any[] = [];
-            if (Array.isArray(data)) {
-              attendeeRecords = data;
-            } else if (data.results && Array.isArray(data.results)) {
-              attendeeRecords = data.results;
-            } else if (data.data && Array.isArray(data.data)) {
-              attendeeRecords = data.data;
-            } else if (data.registrations && Array.isArray(data.registrations)) {
-              attendeeRecords = data.registrations;
-            } else if (data.sessions && Array.isArray(data.sessions)) {
-              attendeeRecords = data.sessions;
-            }
-            
-            // Tag each record with the attendee info for later processing
-            attendeeRecords.forEach(r => {
-              r._attendeeId = attendee.id;
-              r._attendeeExternalId = attendee.externalId;
-            });
-            
-            records.push(...attendeeRecords);
-          } catch (err: any) {
-            errorCount++;
-            lastError = err.message;
-            logger.error({ err: err.message }, `Failed for attendee ${attendee.externalId}`);
-          }
-        }
-        
-        logger.info(`Per-attendee sync complete: ${records.length} total records from ${apiCallCount} calls, ${errorCount} errors`);
-        
-        // Handle complete failure (all calls failed)
-        if (apiCallCount > 0 && errorCount === apiCallCount) {
-          await storage.updateEventSyncState(syncState.id, { 
-            syncStatus: 'error', 
-            lastErrorMessage: `All ${apiCallCount} per-attendee API calls failed. Last error: ${lastError}`,
-            lastErrorAt: new Date(),
-            consecutiveFailures: (syncState.consecutiveFailures || 0) + 1,
-          });
-          return res.json({
-            success: false,
-            message: `All ${apiCallCount} per-attendee API calls failed`,
-            lastError,
-            latencyMs,
-          });
-        }
-        
-      } else {
-        // Standard single-endpoint sync
-        const endpoint = orchestratorForUrl.prepareEndpointForSync(
-          resolvedEndpoint,
-          syncState.lastSyncTimestamp
-        );
-
-        let endpointPath = endpoint;
-        try {
-          const pathUrl = new URL(endpoint);
-          endpointPath = pathUrl.pathname + pathUrl.search;
-        } catch {
-          // Not a full URL, use as-is
-        }
-        endpointPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-        const url = `${baseUrl}${endpointPath}`;
-
-        logger.info(`Syncing ${dataType} from: ${url}`);
-
-        // Make the API call
-        const response = await fetch(url, {
-          method: 'GET',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            ...authHeaders,
-          },
-        });
-
-        latencyMs = Date.now() - startTime;
-        apiCallCount = 1;
-
-        if (!response.ok) {
-          const errorText = await response.text();
-          
-          const errorLower = errorText.toLowerCase();
-          const is404NoData = response.status === 404 && (
-            errorLower.includes('no sessions') || 
-            errorLower.includes('no registrations') || 
-            errorLower.includes('no attendees') ||
-            errorLower.includes('not_found') ||
-            errorLower.includes('not found')
-          );
-          
-          if (is404NoData) {
-            logger.info(`API returned 404 (no data found) for ${dataType} — treating as empty result`);
-            records = [];
-          } else {
-            await storage.updateEventSyncState(syncState.id, { 
-              syncStatus: 'error', 
-              lastErrorMessage: `API returned ${response.status}: ${errorText}`,
-              lastErrorAt: new Date(),
-              consecutiveFailures: (syncState.consecutiveFailures || 0) + 1,
-            });
-            return res.json({
-              success: false,
-              message: `API returned status ${response.status}`,
-              latencyMs,
-            });
-          }
-        }
-
-        if (records.length === 0 && response.ok) {
-          const data = await response.json();
-        
-          if (Array.isArray(data)) {
-            records = data;
-          } else if (data.results && Array.isArray(data.results)) {
-            records = data.results;
-          } else if (data.data && Array.isArray(data.data)) {
-            records = data.data;
-          } else if (data.attendees && Array.isArray(data.attendees)) {
-            records = data.attendees;
-          } else if (data.sessions && Array.isArray(data.sessions)) {
-            records = data.sessions;
-          } else if (data.registrations && Array.isArray(data.registrations)) {
-            records = data.registrations;
-          }
-        }
-      }
-
-      // Process and save records to database based on data type
-      const { syncOrchestrator } = await import("./services/sync-orchestrator");
-      let createdCount = 0;
-      let updatedCount = 0;
-      let processErrorCount = 0;
-
-      if (dataType === 'attendees' && records.length > 0) {
-        logger.info(`Processing ${records.length} attendee records for event ${event.name}`);
-        for (const rawAttendee of records) {
-          try {
-            // Transform using the same logic as SequentialSync
-            const profile = rawAttendee.profile || {};
-            const statusLabel = rawAttendee.registrationStatusLabel || '';
-            const externalId = String(rawAttendee.registrationCode || rawAttendee.pkRegId || '');
-            // orderCode links guests to primary attendee - matches primary's externalId
-            // For primary attendees, orderCode equals their own externalId
-            const orderCode = String(rawAttendee.orderCode || externalId);
-            const attendeeData = {
-              externalId,
-              firstName: profile.firstName || rawAttendee.firstName || '',
-              lastName: profile.lastName || rawAttendee.lastName || '',
-              email: profile.email || rawAttendee.email || '',
-              company: profile.organization || profile.company || null,
-              title: profile.position || profile.title || null,
-              participantType: rawAttendee.attendeeType || rawAttendee.attendeeTypeCode || 'General',
-              registrationStatus: statusLabel || (rawAttendee.isActive ? 'Registered' : 'Invited'),
-              registrationStatusLabel: statusLabel || null,
-              orderCode,
-            };
-
-            if (!attendeeData.externalId) continue;
-
-            const isAttended = (attendeeData.registrationStatus || '').toLowerCase() === 'attended';
-
-            const existing = await storage.getAttendeeByExternalId(event.id, attendeeData.externalId);
-            if (existing) {
-              const updatePayload: any = {
-                firstName: attendeeData.firstName,
-                lastName: attendeeData.lastName,
-                email: attendeeData.email,
-                company: attendeeData.company,
-                title: attendeeData.title,
-                participantType: attendeeData.participantType,
-                registrationStatus: attendeeData.registrationStatus,
-                registrationStatusLabel: attendeeData.registrationStatusLabel,
-                orderCode: attendeeData.orderCode,
-              };
-              if (existing.checkedIn) {
-                updatePayload.registrationStatus = 'Attended';
-                updatePayload.registrationStatusLabel = attendeeData.registrationStatusLabel || existing.registrationStatusLabel || null;
-              } else if (isAttended) {
-                updatePayload.checkedIn = true;
-                updatePayload.checkedInAt = existing.checkedInAt || new Date();
-              }
-              await storage.updateAttendee(existing.id, updatePayload);
-              updatedCount++;
-            } else {
-              const createPayload: any = {
-                eventId: event.id,
-                firstName: attendeeData.firstName,
-                lastName: attendeeData.lastName,
-                email: attendeeData.email,
-                company: attendeeData.company,
-                title: attendeeData.title,
-                participantType: attendeeData.participantType,
-                externalId: attendeeData.externalId,
-                registrationStatus: attendeeData.registrationStatus,
-                registrationStatusLabel: attendeeData.registrationStatusLabel,
-                orderCode: attendeeData.orderCode,
-              };
-              if (isAttended) {
-                createPayload.checkedIn = true;
-                createPayload.checkedInAt = new Date();
-              }
-              await storage.createAttendee(createPayload);
-              createdCount++;
-            }
-          } catch (e: any) {
-            logger.warn({ err: e.message }, `Failed to process attendee`);
-            processErrorCount++;
-          }
-        }
-        logger.info(`Attendee processing complete: ${createdCount} created, ${updatedCount} updated, ${processErrorCount} errors`);
-      }
-
-      // Update sync state with result — format as yyyy/MM/dd HH:mm:ss for Certain API compatibility
-      const now = new Date();
-      const serverTimestamp = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${String(now.getUTCDate()).padStart(2, '0')} ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}:${String(now.getUTCSeconds()).padStart(2, '0')}`;
-      const defaultSyncSettings = (integration.defaultSyncSettings as any) || {};
-      const nextSyncAt = syncOrchestrator.calculateNextSyncTime(
-        { startDate: event.startDate, endDate: event.endDate },
-        defaultSyncSettings
-      );
-      
-      // Determine final status based on error count
-      const totalErrors = errorCount + processErrorCount;
-      const hasPartialFailure = totalErrors > 0;
-      const finalSyncStatus = hasPartialFailure ? 'partial' : 'success';
-      
-      await storage.updateEventSyncState(syncState.id, { 
-        syncStatus: finalSyncStatus,
-        lastSyncAt: new Date(),
-        lastSyncTimestamp: hasPartialFailure ? syncState.lastSyncTimestamp : serverTimestamp,
-        consecutiveFailures: hasPartialFailure ? (syncState.consecutiveFailures || 0) : 0,
-        lastErrorMessage: hasPartialFailure ? `${totalErrors} errors during sync` : null,
-        nextSyncAt,
-        lastSyncResult: {
-          processedCount: records.length,
-          createdCount,
-          updatedCount,
-          errorCount: totalErrors,
-          durationMs: Date.now() - startTime,
-        },
-      });
-
-      let responseMessage: string;
-      if (dataType === 'attendees' && (createdCount > 0 || updatedCount > 0)) {
-        responseMessage = `Synced ${records.length} attendees: ${createdCount} created, ${updatedCount} updated${totalErrors > 0 ? `, ${totalErrors} errors` : ''}`;
-      } else if (requiresAttendeeIteration) {
-        responseMessage = `Synced ${records.length} ${dataType} records from ${apiCallCount} attendees${errorCount > 0 ? ` (${errorCount} errors)` : ''}`;
-      } else {
-        responseMessage = `Synced ${records.length} ${dataType} records`;
-      }
-      
-      res.json({
-        success: true,
-        message: responseMessage,
-        recordCount: records.length,
-        createdCount,
-        updatedCount,
-        apiCallCount,
-        errorCount: totalErrors,
-        latencyMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, `Error syncing ${req.params.dataType}`);
-      try {
-        const syncState = await storage.getEventSyncState(req.params.eventId, req.params.dataType);
-        if (syncState) {
-          await storage.updateEventSyncState(syncState.id, {
-            syncStatus: 'error',
-            lastErrorMessage: error.message || `Failed to sync ${req.params.dataType}`,
-            lastErrorAt: new Date(),
-            consecutiveFailures: (syncState.consecutiveFailures || 0) + 1,
-          });
-        }
-      } catch (stateErr) {
-        logger.error({ err: stateErr }, 'Failed to update sync state after error');
-      }
-      res.status(500).json({ 
-        success: false, 
-        message: error.message || `Failed to sync ${req.params.dataType}`,
-        latencyMs: Date.now() - startTime,
-      });
-    }
-  });
-
-  // Bulk resync check-in statuses back to external platform
-  app.post("/api/events/:eventId/resync-checkins", requireAuth, async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const user = req.dbUser;
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== 'super_admin' && user.customerId !== event.customerId) {
-        return res.status(403).json({ error: "Not authorized to manage this event" });
-      }
-
-      const integration = await checkinSyncService.getIntegrationForEvent(event);
-      if (!integration) {
-        return res.status(400).json({ error: "No active integration found for this event" });
-      }
-
-      const config = integration.realtimeSyncConfig as any;
-      if (!config?.enabled || !config?.endpointUrl) {
-        return res.status(400).json({ error: "Realtime sync is not configured for this integration. Please configure the realtime sync settings first." });
-      }
-
-      const attendees = await storage.getAttendees(eventId);
-      const checkedInAttendees = attendees.filter((a: any) => a.checkedIn && a.externalId);
-
-      if (checkedInAttendees.length === 0) {
-        return res.json({ success: true, message: "No checked-in attendees to resync", synced: 0, failed: 0, total: 0 });
-      }
-
-      let synced = 0;
-      let failed = 0;
-      const errors: string[] = [];
-      const RATE_LIMIT_DELAY_MS = 200;
-
-      for (const attendee of checkedInAttendees) {
-        try {
-          const result = await checkinSyncService.sendCheckinSync(attendee, event, integration);
-          if (result.success) {
-            synced++;
-          } else {
-            failed++;
-            if (errors.length < 10) {
-              errors.push(`${attendee.firstName} ${attendee.lastName} (${attendee.externalId}): ${result.error || 'Unknown error'}`);
-            }
-          }
-          if (RATE_LIMIT_DELAY_MS > 0) {
-            await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY_MS));
-          }
-        } catch (err: any) {
-          failed++;
-          if (errors.length < 10) {
-            errors.push(`${attendee.firstName} ${attendee.lastName}: ${err.message}`);
-          }
-        }
-      }
-
-      logger.info(`Event ${event.name}: ${synced} synced, ${failed} failed out of ${checkedInAttendees.length} checked-in attendees`);
-
-      res.json({
-        success: failed === 0,
-        message: `Resynced ${synced} of ${checkedInAttendees.length} checked-in attendees${failed > 0 ? ` (${failed} failed)` : ''}`,
-        synced,
-        failed,
-        total: checkedInAttendees.length,
-        errors: errors.length > 0 ? errors : undefined,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error");
-      res.status(500).json({ error: error.message || "Failed to resync check-ins" });
-    }
-  });
-
-  // Reset all check-ins for an event (for testing/reset purposes)
-  app.post("/api/events/:eventId/reset-checkins", requireAuth, async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const user = req.dbUser;
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (user.role !== 'super_admin') {
-        return res.status(403).json({ error: "Only super admins can reset event check-ins" });
-      }
-
-      const { db } = await import("./db");
-      const schema = await import("@shared/schema");
-      const { eq, and } = await import("drizzle-orm");
-
-      const result = await db.update(schema.attendees)
-        .set({
-          checkedIn: false,
-          checkedInAt: null,
-          registrationStatus: 'Registered',
-          badgePrinted: false,
-          badgePrintedAt: null,
-        })
-        .where(
-          and(
-            eq(schema.attendees.eventId, eventId),
-            eq(schema.attendees.checkedIn, true)
-          )
-        )
-        .returning({ id: schema.attendees.id });
-
-      const resetCount = result.length;
-      logger.info(`Event ${event.name}: Reset ${resetCount} checked-in attendees`);
-
-      res.json({
-        success: true,
-        message: `Reset ${resetCount} attendee${resetCount !== 1 ? 's' : ''} to Registered status`,
-        resetCount,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error");
-      res.status(500).json({ error: error.message || "Failed to reset check-ins" });
-    }
-  });
-
-  // Update integration sync templates
-  app.patch("/api/integrations/:integrationId/sync-templates", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const templateSchema = z.object({
-        attendees: z.object({
-          endpointPath: z.string(),
-          method: z.string().optional(),
-          headers: z.record(z.string()).optional(),
-          responseMapping: z.record(z.string()).optional(),
-        }).optional(),
-        sessions: z.object({
-          endpointPath: z.string(),
-          method: z.string().optional(),
-          headers: z.record(z.string()).optional(),
-          responseMapping: z.record(z.string()).optional(),
-        }).optional(),
-        sessionRegistrations: z.object({
-          endpointPath: z.string(),
-          method: z.string().optional(),
-          headers: z.record(z.string()).optional(),
-          responseMapping: z.record(z.string()).optional(),
-        }).optional(),
-      });
-
-      const syncTemplates = templateSchema.parse(req.body);
-      const oldSyncTemplates = integration.syncTemplates;
-      const updated = await storage.updateCustomerIntegration(integrationId, { syncTemplates });
-      
-      const customer = await storage.getCustomer(integration.customerId);
-      logSettingsAudit(req, {
-        action: 'sync_templates_update',
-        resourceType: 'customer_integration',
-        resourceId: integrationId,
-        resourceName: integration.name,
-        customerId: integration.customerId,
-        customerName: customer?.name,
-        oldValues: { syncTemplates: oldSyncTemplates },
-        newValues: { syncTemplates },
-      });
-      
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating sync templates");
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
-      }
-      res.status(500).json({ error: "Failed to update sync templates" });
-    }
-  });
-
-  // Update integration default sync settings
-  app.patch("/api/integrations/:integrationId/default-sync-settings", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const settingsSchema = z.object({
-        preEventIntervalMinutes: z.number().min(1).default(1440), // 24 hours
-        duringEventIntervalMinutes: z.number().min(1).default(1), // 1 minute
-        syncWindowStartOffset: z.number().optional(),
-        syncWindowEndOffset: z.number().optional(),
-      });
-
-      const oldSyncSettings = integration.defaultSyncSettings;
-      const defaultSyncSettings = settingsSchema.parse(req.body);
-      const updated = await storage.updateCustomerIntegration(integrationId, { defaultSyncSettings });
-      
-      const customer = await storage.getCustomer(integration.customerId);
-      logSettingsAudit(req, {
-        action: 'sync_settings_update',
-        resourceType: 'customer_integration',
-        resourceId: integrationId,
-        resourceName: integration.name,
-        customerId: integration.customerId,
-        customerName: customer?.name,
-        oldValues: { defaultSyncSettings: oldSyncSettings },
-        newValues: { defaultSyncSettings },
-      });
-      
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating default sync settings");
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: "Validation failed", details: error.errors });
-      }
-      res.status(500).json({ error: "Failed to update default sync settings" });
-    }
-  });
-
-  // Refresh OAuth2 token
-  app.post("/api/integrations/:integrationId/refresh-token", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const integrationId = req.params.integrationId;
-
-      const integration = await storage.getCustomerIntegration(integrationId);
-      if (!integration) {
-        return res.status(404).json({ error: "Integration not found" });
-      }
-
-      const provider = await storage.getIntegrationProvider(integration.providerId);
-      if (!provider || !provider.oauth2Config) {
-        return res.status(400).json({ error: "Provider does not support OAuth2" });
-      }
-
-      const connection = await storage.getIntegrationConnectionByIntegration(integrationId);
-      if (!connection) {
-        return res.status(400).json({ error: "No connection found" });
-      }
-
-      const refreshTokenCred = await storage.getStoredCredentialByType(connection.id, "refresh_token");
-      if (!refreshTokenCred) {
-        return res.status(400).json({ error: "No refresh token available" });
-      }
-
-      const refreshToken = decryptCredential({
-        encryptedValue: refreshTokenCred.encryptedValue,
-        iv: refreshTokenCred.iv,
-        authTag: refreshTokenCred.authTag,
-        encryptionKeyId: refreshTokenCred.encryptionKeyId,
-      });
-
-      const clientId = process.env[`${integration.providerId.toUpperCase()}_CLIENT_ID`] || "";
-      const clientSecret = process.env[`${integration.providerId.toUpperCase()}_CLIENT_SECRET`] || "";
-
-      const tokens = await refreshAccessToken(
-        {
-          clientId,
-          clientSecret,
-          authorizationUrl: provider.oauth2Config.authorizationUrl!,
-          tokenUrl: provider.oauth2Config.tokenUrl!,
-          redirectUri: "",
-        },
-        refreshToken
-      );
-
-      const existingAccessToken = await storage.getStoredCredentialByType(connection.id, "access_token");
-      if (existingAccessToken) {
-        await storage.updateStoredCredential(existingAccessToken.id, {
-          isValid: false,
-          invalidatedAt: new Date(),
-          invalidationReason: "refreshed",
-        });
-      }
-
-      const accessTokenEncrypted = encryptCredential(tokens.access_token);
-      await storage.createStoredCredential({
-        connectionId: connection.id,
-        credentialType: "access_token",
-        encryptedValue: accessTokenEncrypted.encryptedValue,
-        encryptionKeyId: accessTokenEncrypted.encryptionKeyId,
-        iv: accessTokenEncrypted.iv,
-        authTag: accessTokenEncrypted.authTag,
-        maskedValue: maskCredential(tokens.access_token),
-        tokenType: tokens.token_type,
-        scope: tokens.scope,
-        expiresAt: tokens.expires_in ? calculateTokenExpiry(tokens.expires_in) : null,
-      });
-
-      if (tokens.refresh_token) {
-        await storage.updateStoredCredential(refreshTokenCred.id, {
-          isValid: false,
-          invalidatedAt: new Date(),
-          invalidationReason: "rotated",
-        });
-
-        const newRefreshTokenEncrypted = encryptCredential(tokens.refresh_token);
-        await storage.createStoredCredential({
-          connectionId: connection.id,
-          credentialType: "refresh_token",
-          encryptedValue: newRefreshTokenEncrypted.encryptedValue,
-          encryptionKeyId: newRefreshTokenEncrypted.encryptionKeyId,
-          iv: newRefreshTokenEncrypted.iv,
-          authTag: newRefreshTokenEncrypted.authTag,
-          maskedValue: maskCredential(tokens.refresh_token),
-        });
-      }
-
-      await storage.updateIntegrationConnection(connection.id, {
-        lastValidatedAt: new Date(),
-      });
-
-      res.json({ 
-        success: true, 
-        expiresAt: tokens.expires_in ? calculateTokenExpiry(tokens.expires_in) : null
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error refreshing token");
-      res.status(500).json({ error: "Failed to refresh token" });
-    }
-  });
 
   // =====================
   // Attendee Routes (scoped to event or customer)
@@ -7067,23 +4568,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ error: "Forbidden" });
       }
       
+      // Resolve revert status: event override → integration config → default
+      const eventSyncSettings = event.syncSettings;
+      let revertStatus = 'Registered';
+      let integration: any = null;
+      if (event.integrationId) {
+        integration = await storage.getCustomerIntegration(event.integrationId);
+        const rtConfig = integration?.realtimeSyncConfig as any;
+        if (rtConfig?.revertStatus) revertStatus = rtConfig.revertStatus;
+      }
+      if (eventSyncSettings?.revertStatus) revertStatus = eventSyncSettings.revertStatus;
+
       const revertUpdates = {
         checkedIn: false,
         checkedInAt: null,
-        registrationStatus: "Registered",
+        registrationStatus: revertStatus,
         badgePrinted: false,
         badgePrintedAt: null,
       };
-      
+
       const updated = await storage.updateAttendee(req.params.id, revertUpdates as any);
 
       await storage.deleteAttendeeWorkflowResponses(req.params.id, attendee.eventId);
       await storage.deleteAttendeeSignaturesByAttendee(req.params.id, attendee.eventId);
-      
+
       // Send real-time sync revert to external system (async, non-blocking)
-      // Use void to explicitly indicate fire-and-forget pattern
       if (event && updated) {
-        const integration = await checkinSyncService.getIntegrationForEvent(event);
+        if (!integration && event.integrationId) {
+          integration = await checkinSyncService.getIntegrationForEvent(event);
+        } else if (!integration) {
+          integration = await checkinSyncService.getIntegrationForEvent(event);
+        }
         if (integration) {
           void checkinSyncService.sendCheckinRevertSync(updated, event, integration, req.body.revertedBy)
             .then(result => {
@@ -7778,7 +5293,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isCheckedIn) {
         return res.status(409).json({ error: "Attendee is already checked in", alreadyCheckedIn: true });
       }
-      
+
+      // Check capacity (staff can override)
+      const forceOverride = req.body.overrideCapacity === true;
+      if (session.capacity && !forceOverride) {
+        const checkins = await storage.getSessionCheckins(sessionId);
+        const checkinIds = new Set(checkins.filter(c => c.action === 'checkin').map(c => c.attendeeId));
+        const checkoutIds = new Set(checkins.filter(c => c.action === 'checkout').map(c => c.attendeeId));
+        const activeCount = [...checkinIds].filter(id => !checkoutIds.has(id)).length;
+        if (activeCount >= session.capacity) {
+          return res.status(409).json({
+            error: `Session is at capacity (${activeCount}/${session.capacity})`,
+            atCapacity: true,
+            currentCount: activeCount,
+            capacity: session.capacity,
+          });
+        }
+      }
+
       // Create check-in record
       const checkin = await storage.createSessionCheckin({
         sessionId,
@@ -8034,2769 +5566,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // =====================
-  // Temp Staff Routes
-  // =====================
 
-  // Get event sync settings
-  app.get("/api/events/:eventId/sync-settings", requireAuth, async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
+  // Temp Staff Routes — extracted to routes/temp-staff.ts
 
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
 
-      const syncSettings = (event.syncSettings as any) || {};
-      let accountRealtimeEnabled = false;
-      let accountSessionRealtimeEnabled = false;
-      let accountSyncIntervalMinutes = 60;
-      if (event.integrationId) {
-        const integration = await storage.getCustomerIntegration(event.integrationId);
-        const rtConfig = integration?.realtimeSyncConfig as any;
-        accountRealtimeEnabled = !!(rtConfig?.enabled);
-        const sessionRtConfig = integration?.realtimeSessionSyncConfig as any;
-        accountSessionRealtimeEnabled = !!(sessionRtConfig?.enabled);
-        const defaultSync = integration?.defaultSyncSettings as any;
-        if (defaultSync?.syncIntervalMinutes) {
-          accountSyncIntervalMinutes = defaultSync.syncIntervalMinutes;
-        }
-      }
 
-      res.json({
-        realtimeSyncEnabled: syncSettings.realtimeSyncEnabled ?? null,
-        realtimeSessionSyncEnabled: syncSettings.realtimeSessionSyncEnabled ?? null,
-        syncFrozen: syncSettings.syncFrozen ?? false,
-        syncFrozenAt: syncSettings.syncFrozenAt ?? null,
-        syncIntervalMinutes: syncSettings.syncIntervalMinutes ?? null,
-        accountSyncIntervalMinutes,
-        accountRealtimeEnabled,
-        accountSessionRealtimeEnabled,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "GET error");
-      res.status(500).json({ error: "Failed to get sync settings" });
-    }
-  });
+  // Event Workflow Routes — extracted to routes/workflows.ts
 
-  // Update event sync settings
-  app.patch("/api/events/:eventId/sync-settings", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const { realtimeSyncEnabled, realtimeSessionSyncEnabled, syncFrozen, syncIntervalMinutes } = req.body;
-
-      if (realtimeSyncEnabled !== undefined && realtimeSyncEnabled !== null && typeof realtimeSyncEnabled !== 'boolean') {
-        return res.status(400).json({ error: "realtimeSyncEnabled must be boolean or null" });
-      }
-      if (realtimeSessionSyncEnabled !== undefined && realtimeSessionSyncEnabled !== null && typeof realtimeSessionSyncEnabled !== 'boolean') {
-        return res.status(400).json({ error: "realtimeSessionSyncEnabled must be boolean or null" });
-      }
-      if (syncFrozen !== undefined && typeof syncFrozen !== 'boolean') {
-        return res.status(400).json({ error: "syncFrozen must be boolean" });
-      }
-      if (syncIntervalMinutes !== undefined && syncIntervalMinutes !== null) {
-        const interval = Number(syncIntervalMinutes);
-        if (!Number.isInteger(interval) || interval < 1 || interval > 1440) {
-          return res.status(400).json({ error: "syncIntervalMinutes must be an integer between 1 and 1440, or null" });
-        }
-      }
-
-      const existing = (event.syncSettings as any) || {};
-
-      const updated: any = { ...existing };
-      if (realtimeSyncEnabled !== undefined) {
-        updated.realtimeSyncEnabled = realtimeSyncEnabled;
-      }
-      if (realtimeSessionSyncEnabled !== undefined) {
-        updated.realtimeSessionSyncEnabled = realtimeSessionSyncEnabled;
-      }
-      if (syncFrozen !== undefined) {
-        updated.syncFrozen = syncFrozen;
-        if (syncFrozen && !existing.syncFrozenAt) {
-          updated.syncFrozenAt = new Date().toISOString();
-        } else if (!syncFrozen) {
-          updated.syncFrozenAt = null;
-        }
-      }
-      if (syncIntervalMinutes !== undefined) {
-        updated.syncIntervalMinutes = syncIntervalMinutes;
-      }
-
-      const updatedEvent = await storage.updateEvent(eventId, { syncSettings: updated });
-
-      await storage.createAuditLog({
-        action: "event_sync_settings_update",
-        userId: req.dbUser?.id || "unknown",
-        userEmail: req.dbUser?.email || "unknown",
-        userRole: req.dbUser?.role || "unknown",
-        customerId: event.customerId,
-        customerName: null,
-        resourceType: "event",
-        resourceId: eventId,
-        resourceName: event.name,
-        changedFields: [
-          ...(realtimeSyncEnabled !== undefined ? [{
-            field: "realtimeSyncEnabled",
-            oldValue: existing.realtimeSyncEnabled ?? null,
-            newValue: updated.realtimeSyncEnabled,
-          }] : []),
-          ...(realtimeSessionSyncEnabled !== undefined ? [{
-            field: "realtimeSessionSyncEnabled",
-            oldValue: existing.realtimeSessionSyncEnabled ?? null,
-            newValue: updated.realtimeSessionSyncEnabled,
-          }] : []),
-          ...(syncFrozen !== undefined ? [{
-            field: "syncFrozen",
-            oldValue: existing.syncFrozen ?? false,
-            newValue: updated.syncFrozen,
-          }] : []),
-        ],
-        metadata: null,
-        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || null,
-        userAgent: req.headers["user-agent"] || null,
-      });
-
-      logger.info(`Updated event ${eventId}: realtimeSyncEnabled=${updated.realtimeSyncEnabled}, realtimeSessionSyncEnabled=${updated.realtimeSessionSyncEnabled}, syncFrozen=${updated.syncFrozen}`);
-
-      res.json({
-        realtimeSyncEnabled: updated.realtimeSyncEnabled ?? null,
-        realtimeSessionSyncEnabled: updated.realtimeSessionSyncEnabled ?? null,
-        syncFrozen: updated.syncFrozen ?? false,
-        syncFrozenAt: updated.syncFrozenAt ?? null,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "PATCH error");
-      res.status(500).json({ error: "Failed to update sync settings" });
-    }
-  });
-
-  // Get discovered attendee statuses for an event
-  app.get("/api/events/:eventId/discovered-statuses", requireAuth, async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const attendees = await storage.getAttendees(eventId);
-      const statusCounts = new Map<string, number>();
-      for (const a of attendees) {
-        const label = (a as any).registrationStatusLabel || a.registrationStatus || 'Unknown';
-        statusCounts.set(label, (statusCounts.get(label) || 0) + 1);
-      }
-
-      const statuses = Array.from(statusCounts.entries())
-        .map(([label, count]) => ({ label, count }))
-        .sort((a, b) => b.count - a.count);
-
-      const syncSettings = (event.syncSettings as any) || {};
-      res.json({
-        statuses,
-        selectedStatuses: syncSettings.selectedStatuses || null,
-        statusesConfigured: !!syncSettings.statusesConfigured,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error fetching discovered statuses");
-      res.status(500).json({ error: "Failed to fetch discovered statuses" });
-    }
-  });
-
-  // Update selected attendee statuses for an event (add-only for non-super_admin)
-  app.patch("/api/events/:eventId/selected-statuses", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
-    try {
-      const { eventId } = req.params;
-      const event = await storage.getEvent(eventId);
-      if (!event) return res.status(404).json({ error: "Event not found" });
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Not authorized" });
-      }
-
-      const { selectedStatuses } = req.body;
-      if (!Array.isArray(selectedStatuses) || selectedStatuses.length === 0) {
-        return res.status(400).json({ error: "selectedStatuses must be a non-empty array of strings" });
-      }
-
-      const existing = (event.syncSettings as any) || {};
-      const previouslySelected: string[] = existing.selectedStatuses || [];
-
-      // Add-only enforcement: non-super_admin cannot remove previously selected statuses
-      if (!isSuperAdmin(req.dbUser) && previouslySelected.length > 0) {
-        const removed = previouslySelected.filter((s: string) => !selectedStatuses.includes(s));
-        if (removed.length > 0) {
-          return res.status(403).json({
-            error: "Only super admins can remove previously selected statuses",
-            removedStatuses: removed,
-          });
-        }
-      }
-
-      const updated = {
-        ...existing,
-        selectedStatuses,
-        statusesConfigured: true,
-      };
-
-      const updatedEvent = await storage.updateEvent(eventId, { syncSettings: updated });
-
-      // Stamp billableAt on matching attendees that don't already have it
-      const attendees = await storage.getAttendees(eventId);
-      const now = new Date();
-      let newlyBillable = 0;
-      for (const attendee of attendees) {
-        if ((attendee as any).billableAt) continue; // Already stamped
-        const status = (attendee as any).registrationStatusLabel || attendee.registrationStatus;
-        if (selectedStatuses.includes(status)) {
-          await storage.updateAttendee(attendee.id, { billableAt: now } as any);
-          newlyBillable++;
-        }
-      }
-      if (newlyBillable > 0) {
-        logger.info(`Stamped billableAt on ${newlyBillable} attendees for event ${eventId}`);
-      }
-
-      await storage.createAuditLog({
-        action: "event_status_selection_update",
-        userId: req.dbUser?.id || "unknown",
-        userEmail: req.dbUser?.email || "unknown",
-        userRole: req.dbUser?.role || "unknown",
-        customerId: event.customerId,
-        customerName: null,
-        resourceType: "event",
-        resourceId: eventId,
-        resourceName: event.name,
-        changedFields: [{
-          field: "selectedStatuses",
-          oldValue: previouslySelected.length > 0 ? previouslySelected.join(", ") : "none",
-          newValue: selectedStatuses.join(", "),
-        }],
-        metadata: null,
-        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || null,
-        userAgent: req.headers["user-agent"] || null,
-      });
-
-      res.json({
-        selectedStatuses: updated.selectedStatuses,
-        statusesConfigured: true,
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error updating selected statuses");
-      res.status(500).json({ error: "Failed to update selected statuses" });
-    }
-  });
-
-  // Configure temp staff settings for an event (admin only)
-  app.patch("/api/events/:eventId/staff-settings", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      // Verify user has access to this event
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const { enabled, passcode, startTime, endTime, badgeTemplateId, allowedSessionIds, allowWalkins, allowKioskFromStaff, allowGroupCheckin, groupDisclaimerMode, groupCheckinEnabled, allowKioskWalkins, kioskWalkinConfig } = req.body;
-
-      // Validate time window
-      if (startTime && endTime && new Date(startTime) >= new Date(endTime)) {
-        return res.status(400).json({ error: "Start time must be before end time" });
-      }
-
-      // Validate passcode minimum length
-      if (passcode && passcode.length < 4) {
-        return res.status(400).json({ error: "Passcode must be at least 4 characters" });
-      }
-
-      let staffSettings = event.tempStaffSettings;
-
-      if (enabled === false) {
-        // Disable temp staff access
-        staffSettings = null;
-      } else {
-        // Build or update settings
-        const newSettings: typeof staffSettings = {
-          enabled: true,
-          passcodeHash: passcode ? hashPasscode(passcode) : (staffSettings?.passcodeHash || ''),
-          passcode: passcode || staffSettings?.passcode,
-          startTime: startTime || staffSettings?.startTime || new Date().toISOString(),
-          endTime: endTime || staffSettings?.endTime || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-          badgeTemplateId: badgeTemplateId !== undefined ? badgeTemplateId : staffSettings?.badgeTemplateId,
-          allowedSessionIds: allowedSessionIds !== undefined ? allowedSessionIds : staffSettings?.allowedSessionIds,
-          allowWalkins: allowWalkins !== undefined ? allowWalkins : (staffSettings?.allowWalkins ?? false),
-          allowKioskFromStaff: allowKioskFromStaff !== undefined ? allowKioskFromStaff : (staffSettings?.allowKioskFromStaff ?? false),
-          allowGroupCheckin: allowGroupCheckin !== undefined ? allowGroupCheckin : (staffSettings?.allowGroupCheckin ?? false),
-          groupDisclaimerMode: groupDisclaimerMode !== undefined ? groupDisclaimerMode : (staffSettings?.groupDisclaimerMode ?? 'group'),
-          groupCheckinEnabled: groupCheckinEnabled !== undefined ? groupCheckinEnabled : (staffSettings?.groupCheckinEnabled ?? false),
-          allowKioskWalkins: allowKioskWalkins !== undefined ? allowKioskWalkins : (staffSettings?.allowKioskWalkins ?? false),
-          kioskWalkinConfig: kioskWalkinConfig !== undefined ? {
-            enabledFields: Array.isArray(kioskWalkinConfig?.enabledFields) ? kioskWalkinConfig.enabledFields.filter((f: string) => ['firstName', 'lastName', 'email', 'company', 'title', 'participantType'].includes(f)) : ['firstName', 'lastName', 'email'],
-            requiredFields: Array.isArray(kioskWalkinConfig?.requiredFields) ? kioskWalkinConfig.requiredFields.filter((f: string) => ['firstName', 'lastName', 'email', 'company', 'title', 'participantType'].includes(f)) : ['firstName', 'lastName', 'email'],
-            availableTypes: Array.isArray(kioskWalkinConfig?.availableTypes) && kioskWalkinConfig.availableTypes.length > 0 ? kioskWalkinConfig.availableTypes.map((t: string) => String(t).trim()).filter(Boolean) : ['Walk-in'],
-            defaultType: kioskWalkinConfig?.defaultType && typeof kioskWalkinConfig.defaultType === 'string' ? kioskWalkinConfig.defaultType.trim() : 'Walk-in',
-          } : staffSettings?.kioskWalkinConfig,
-        };
-
-        // Passcode is required for new settings
-        if (!newSettings.passcodeHash) {
-          return res.status(400).json({ error: "Passcode is required when enabling temp staff access" });
-        }
-
-        staffSettings = newSettings;
-      }
-
-      // When enabling staff settings, also mark event as configured
-      const updateData: Record<string, unknown> = {
-        tempStaffSettings: staffSettings as any,
-      };
-      if (staffSettings?.enabled) {
-        const staffEvent = await storage.getEvent(req.params.eventId);
-        const staffStatusesOk = !!(staffEvent?.syncSettings as any)?.statusesConfigured;
-        if (staffStatusesOk) {
-          updateData.configStatus = 'configured';
-        }
-      }
-
-      const updatedEvent = await storage.updateEvent(req.params.eventId, updateData);
-
-      res.json({
-        success: true,
-        event: {
-          id: updatedEvent?.id,
-          name: updatedEvent?.name,
-          staffEnabled: !!updatedEvent?.tempStaffSettings?.enabled,
-          staffStartTime: updatedEvent?.tempStaffSettings?.startTime,
-          staffEndTime: updatedEvent?.tempStaffSettings?.endTime,
-          configStatus: updatedEvent?.configStatus,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error updating temp staff settings");
-      res.status(500).json({ error: "Failed to update temp staff settings" });
-    }
-  });
-
-  // Get temp staff settings for an event (admin only)
-  app.get("/api/events/:eventId/staff-settings", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      // Verify user has access to this event
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const settings = event.tempStaffSettings;
-
-      res.json({
-        enabled: settings?.enabled || false,
-        startTime: settings?.startTime || null,
-        endTime: settings?.endTime || null,
-        badgeTemplateId: settings?.badgeTemplateId || null,
-        allowedSessionIds: settings?.allowedSessionIds || null,
-        hasPasscode: !!settings?.passcodeHash,
-        passcode: settings?.passcode || null,
-        allowWalkins: settings?.allowWalkins || false,
-        allowKioskFromStaff: settings?.allowKioskFromStaff || false,
-        allowGroupCheckin: settings?.allowGroupCheckin || false,
-        groupDisclaimerMode: settings?.groupDisclaimerMode || 'group',
-        groupCheckinEnabled: settings?.groupCheckinEnabled || false,
-        allowKioskWalkins: settings?.allowKioskWalkins || false,
-        kioskWalkinConfig: settings?.kioskWalkinConfig || null,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching temp staff settings");
-      res.status(500).json({ error: "Failed to fetch temp staff settings" });
-    }
-  });
-
-  // Staff login rate limiting: 5 attempts per 15 minutes per eventId+IP
-  const staffLoginAttempts = new Map<string, { count: number; firstAttempt: number; lockedUntil?: number }>();
-  const STAFF_LOGIN_MAX_ATTEMPTS = penTestMode ? 500 : 5;
-  const STAFF_LOGIN_WINDOW_MS = 15 * 60 * 1000;
-  const STAFF_LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
-
-  // Temp staff login (public - no auth required)
-  app.post("/api/staff/events/:eventId/login", async (req, res) => {
-    try {
-      const rateLimitKey = `${req.params.eventId}:${req.ip}`;
-      const now = Date.now();
-      const attempts = staffLoginAttempts.get(rateLimitKey);
-
-      if (attempts) {
-        if (attempts.lockedUntil && now < attempts.lockedUntil) {
-          const retryAfter = Math.ceil((attempts.lockedUntil - now) / 1000);
-          return res.status(429).json({
-            error: "Too many login attempts. Please try again later.",
-            retryAfterSeconds: retryAfter,
-          });
-        }
-        if (now - attempts.firstAttempt > STAFF_LOGIN_WINDOW_MS) {
-          staffLoginAttempts.delete(rateLimitKey);
-        }
-      }
-
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      // Block access to unconfigured events
-      if (event.configStatus === 'unconfigured') {
-        return res.status(403).json({ 
-          error: "This event has not been configured for check-in yet. Please contact your event administrator.",
-          code: "EVENT_NOT_CONFIGURED"
-        });
-      }
-
-      const settings = event.tempStaffSettings;
-      if (!settings?.enabled) {
-        return res.status(403).json({ error: "Temp staff access is not enabled for this event" });
-      }
-
-      // Validate time window - only enforce if times are set
-      const currentTime = new Date();
-
-      if (settings.startTime) {
-        const startTime = new Date(settings.startTime);
-        if (currentTime < startTime) {
-          return res.status(403).json({ 
-            error: "Temp staff access has not started yet",
-            startsAt: settings.startTime,
-          });
-        }
-      }
-
-      if (settings.endTime) {
-        const endTime = new Date(settings.endTime);
-        if (currentTime > endTime) {
-          return res.status(403).json({ 
-            error: "Temp staff access has ended",
-            endedAt: settings.endTime,
-          });
-        }
-      }
-
-      const { passcode, staffName } = req.body;
-
-      if (!passcode || !staffName) {
-        return res.status(400).json({ error: "Passcode and staff name are required" });
-      }
-
-      // Verify passcode
-      if (!verifyPasscode(passcode, settings.passcodeHash)) {
-        const current = staffLoginAttempts.get(rateLimitKey) || { count: 0, firstAttempt: now };
-        current.count++;
-        if (current.count >= STAFF_LOGIN_MAX_ATTEMPTS) {
-          current.lockedUntil = now + STAFF_LOGIN_LOCKOUT_MS;
-        }
-        staffLoginAttempts.set(rateLimitKey, current);
-
-        const remaining = STAFF_LOGIN_MAX_ATTEMPTS - current.count;
-        return res.status(401).json({
-          error: "Invalid passcode",
-          ...(remaining > 0 && remaining <= 2 ? { attemptsRemaining: remaining } : {}),
-        });
-      }
-
-      staffLoginAttempts.delete(rateLimitKey);
-
-      // Create session token
-      const token = generateSessionToken();
-      // Expire at end time if set, otherwise 12 hours from now
-      const maxExpiry = Date.now() + 12 * 60 * 60 * 1000;
-      let expiresAt: Date;
-      
-      if (settings.endTime) {
-        const endTimeMs = new Date(settings.endTime).getTime();
-        // Guard against malformed date strings producing NaN
-        if (!Number.isNaN(endTimeMs)) {
-          expiresAt = new Date(Math.min(endTimeMs, maxExpiry));
-        } else {
-          logger.warn("Malformed endTime in temp staff settings, falling back to max expiry");
-          expiresAt = new Date(maxExpiry);
-        }
-      } else {
-        expiresAt = new Date(maxExpiry);
-      }
-
-      const session = await storage.createStaffSession({
-        eventId: event.id,
-        staffName: staffName.trim(),
-        token,
-        expiresAt,
-        isActive: true,
-      });
-
-      // Log the login
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'login',
-        metadata: { staffName: staffName.trim() },
-      });
-
-      const customer = await storage.getCustomer(event.customerId);
-
-      res.json({
-        success: true,
-        token,
-        expiresAt: expiresAt.toISOString(),
-        session: {
-          id: session.id,
-          staffName: session.staffName,
-        },
-        event: {
-          id: event.id,
-          name: event.name,
-          customerId: event.customerId,
-          customerName: customer?.name,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error during temp staff login");
-      res.status(500).json({ error: "Login failed" });
-    }
-  });
-
-  // Get temp staff session info (validates token is still valid)
-  app.get("/api/staff/session", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const customer = await storage.getCustomer(event.customerId);
-
-      res.json({
-        session: {
-          id: session.id,
-          staffName: session.staffName,
-          expiresAt: session.expiresAt,
-        },
-        event: {
-          id: event.id,
-          name: event.name,
-          customerId: event.customerId,
-          customerName: customer?.name,
-          eventDate: event.eventDate,
-          syncSettings: event.syncSettings || null,
-          tempStaffSettings: event.tempStaffSettings || null,
-        },
-        settings: {
-          printPreviewOnCheckin: event.tempStaffSettings?.printPreviewOnCheckin || false,
-          allowWalkins: event.tempStaffSettings?.allowWalkins || false,
-          allowKioskFromStaff: event.tempStaffSettings?.allowKioskFromStaff || false,
-          allowGroupCheckin: event.tempStaffSettings?.allowGroupCheckin || false,
-          groupDisclaimerMode: event.tempStaffSettings?.groupDisclaimerMode || 'group',
-          groupCheckinEnabled: event.tempStaffSettings?.groupCheckinEnabled || false,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching temp staff session");
-      res.status(500).json({ error: "Failed to fetch session" });
-    }
-  });
-
-  app.post("/api/staff/feedback", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const { db } = await import("./db");
-      const { feedbackEntries } = await import("@shared/schema");
-      const { randomUUID } = await import("crypto");
-      const { sql } = await import("drizzle-orm");
-
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { type, message, severity, screenshotDataUrl } = req.body;
-
-      if (!message || !type) {
-        return res.status(400).json({ error: "Message and type are required" });
-      }
-
-      const validTypes = ["issue", "feature_request", "comment"];
-      if (!validTypes.includes(type)) {
-        return res.status(400).json({ error: "Invalid feedback type" });
-      }
-
-      if (typeof message !== "string" || message.length > 5000) {
-        return res.status(400).json({ error: "Message must be a string under 5000 characters" });
-      }
-
-      const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
-      const ALLOWED_IMAGE_TYPES = ["png", "jpeg", "jpg", "gif", "webp"];
-      let screenshotUrl: string | undefined;
-      if (screenshotDataUrl && typeof screenshotDataUrl === "string" && screenshotDataUrl.startsWith("data:image/")) {
-        try {
-          const matches = screenshotDataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
-          if (matches) {
-            const ext = matches[1].toLowerCase();
-            if (!ALLOWED_IMAGE_TYPES.includes(ext)) {
-              return res.status(400).json({ error: "Invalid screenshot image type" });
-            }
-            const buffer = Buffer.from(matches[2], "base64");
-            if (buffer.length > MAX_SCREENSHOT_BYTES) {
-              return res.status(400).json({ error: "Screenshot must be under 5MB" });
-            }
-            const { default: objectStorage } = await import("@replit/object-storage");
-            const client = new objectStorage();
-            const key = `feedback/staff-screenshot-${Date.now()}.${ext}`;
-            await client.uploadFromBytes(key, buffer);
-            screenshotUrl = `/objects/${key}`;
-          }
-        } catch (uploadErr) {
-          logger.error({ err: uploadErr }, "Screenshot upload failed");
-        }
-      }
-
-      const staffPage = `/staff/${event.id}/dashboard`;
-      const staffPageTitle = `Staff Dashboard - ${event.name}`;
-
-      const ticketResult = await db.execute(sql`SELECT nextval('feedback_ticket_seq') as num`);
-      const ticketNumber = Number(ticketResult.rows?.[0]?.num ?? ticketResult[0]?.num);
-
-      const [entry] = await db.insert(feedbackEntries).values({
-        id: `fb-${randomUUID().substring(0, 8)}`,
-        ticketNumber,
-        customerId: event.customerId,
-        eventId: event.id,
-        userId: null,
-        userRole: "staff",
-        submitterName: session.staffName,
-        page: staffPage,
-        pageTitle: staffPageTitle,
-        type,
-        message,
-        tags: ["staff-feedback"],
-        severity: severity || null,
-        screenshotUrl: screenshotUrl || null,
-        status: "new",
-      }).returning();
-
-      let customerName = "";
-      try {
-        const { customers } = await import("@shared/schema");
-        const { eq } = await import("drizzle-orm");
-        const [cust] = await db.select({ name: customers.name }).from(customers).where(eq(customers.id, event.customerId)).limit(1);
-        if (cust?.name) customerName = cust.name;
-      } catch {}
-
-      const { sendFeedbackToSlack } = await import("./services/slack-feedback");
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
-      sendFeedbackToSlack({
-        type,
-        message,
-        severity,
-        page: staffPage,
-        pageTitle: staffPageTitle,
-        userName: `${session.staffName} (Staff)`,
-        userRole: "staff",
-        customerName,
-        eventId: event.id,
-        tags: ["staff-feedback"],
-        screenshotUrl: screenshotUrl ? `${baseUrl}${screenshotUrl}` : undefined,
-        ticketRef: ticketNumber ? `FB-${ticketNumber}` : undefined,
-      }).catch(() => {});
-
-      res.json(entry);
-    } catch (error) {
-      logger.error({ err: error }, "Error submitting staff feedback");
-      res.status(500).json({ error: "Failed to submit feedback" });
-    }
-  });
-
-  // Get printers available for temp staff (from account-level configuration)
-  // Filters by event's locationId if assigned, otherwise returns all customer printers
-  app.get("/api/staff/printers", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      let printers = await storage.getPrinters(event.customerId);
-      
-      // Filter by event location if assigned
-      if (event.locationId) {
-        printers = printers.filter(p => 
-          p.locationId === event.locationId || p.locationId === null
-        );
-      }
-      
-      res.json({
-        printers: printers.map(p => ({
-          id: p.id,
-          name: p.name,
-          connectionType: p.connectionType,
-          ipAddress: p.ipAddress,
-          port: p.port,
-          dpi: p.dpi,
-          locationId: p.locationId,
-        })),
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching printers for temp staff");
-      res.status(500).json({ error: "Failed to fetch printers" });
-    }
-  });
-
-  // Get PrintNode printers (for temp staff)
-  app.get("/api/staff/printnode/printers", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      if (!printNodeService.isConfigured()) {
-        return res.json({ 
-          configured: false, 
-          printers: [],
-          message: 'PrintNode is not configured. Contact your administrator.'
-        });
-      }
-
-      const printers = await printNodeService.getPrinters();
-      res.json({ 
-        configured: true,
-        printers: printers.map(p => ({
-          id: p.id,
-          name: p.name,
-          description: p.description,
-          computerName: p.computer.name,
-          state: p.state,
-        })),
-      });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error fetching PrintNode printers");
-      res.status(500).json({ error: error.message || "Failed to fetch PrintNode printers" });
-    }
-  });
-
-  // Test PrintNode connection
-  app.get("/api/staff/printnode/status", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const result = await printNodeService.testConnection();
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  });
-
-  // Print badge via PrintNode
-  app.post("/api/staff/printnode/print", largeBodyParser, staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const { printerId, pdfBase64, zplData, title, badgeWidth, badgeHeight } = req.body;
-
-      if (!printerId) {
-        return res.status(400).json({ error: "printerId is required" });
-      }
-
-      if (!pdfBase64 && !zplData) {
-        return res.status(400).json({ error: "Either pdfBase64 or zplData is required" });
-      }
-
-      let result;
-      if (zplData) {
-        result = await printNodeService.printRaw(printerId, zplData, title || 'Badge Print');
-      } else {
-        const printOptions = badgeWidth && badgeHeight
-          ? { widthInches: badgeWidth, heightInches: badgeHeight, fitToPage: true }
-          : undefined;
-        result = await printNodeService.printPdf(printerId, pdfBase64, title || 'Badge Print', printOptions);
-      }
-
-      res.json({ success: true, jobId: result.id });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error printing via PrintNode");
-      res.status(500).json({ error: error.message || "Print failed" });
-    }
-  });
-
-  // Test print - sends a simple test label to verify printer connection
-  app.post("/api/staff/printnode/test-print", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const { printerId } = req.body;
-
-      if (!printerId) {
-        return res.status(400).json({ error: "printerId is required" });
-      }
-
-      // Simple test ZPL that should work on any Zebra printer (203 DPI, 2x3 inch label)
-      const testZpl = `^XA
-^MMT
-^PW406
-^LL609
-^LS0
-^FO20,50^A0N,40,40^FDPrintNode Test^FS
-^FO20,100^A0N,30,30^FDIf you see this,^FS
-^FO20,140^A0N,30,30^FDZPL printing works!^FS
-^FO20,200^A0N,20,20^FDPrinter ID: ${printerId}^FS
-^FO20,230^A0N,20,20^FDTime: ${new Date().toISOString()}^FS
-^XZ`;
-
-      logger.info('Sending TEST print to printer', printerId);
-      const result = await printNodeService.printRaw(printerId, testZpl, 'Test Print');
-      
-      res.json({ success: true, jobId: result.id, message: 'Test print sent - check your printer!' });
-    } catch (error: any) {
-      logger.error({ err: error }, "Error sending test print");
-      res.status(500).json({ error: error.message || "Test print failed" });
-    }
-  });
-
-  // Temp staff logout
-  app.post("/api/staff/logout", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-
-      await storage.invalidateStaffSession(session.id);
-
-      // Log the logout
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: session.eventId,
-        action: 'logout',
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error during temp staff logout");
-      res.status(500).json({ error: "Logout failed" });
-    }
-  });
-
-  // Get attendees for temp staff event
-  app.get("/api/staff/attendees", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const attendees = await storage.getAttendees(event.id);
-
-      res.json(attendees.map(a => ({
-        id: a.id,
-        firstName: a.firstName,
-        lastName: a.lastName,
-        email: a.email,
-        company: a.company,
-        title: a.title,
-        participantType: a.participantType,
-        registrationStatus: a.registrationStatus,
-        registrationStatusLabel: a.registrationStatusLabel,
-        checkedIn: a.checkedIn,
-        checkedInAt: a.checkedInAt,
-        badgePrinted: a.badgePrinted,
-        badgePrintedAt: a.badgePrintedAt,
-        externalId: a.externalId,
-        orderCode: a.orderCode,
-      })));
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching attendees for temp staff");
-      res.status(500).json({ error: "Failed to fetch attendees" });
-    }
-  });
-
-  // Staff group lookup by order code
-  app.get("/api/staff/group/:orderCode", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const allAttendees = await storage.getAttendees(event.id);
-      const members = allAttendees.filter((a: any) => a.orderCode === req.params.orderCode);
-
-      if (members.length === 0) {
-        return res.json({ found: false, members: [], primaryId: null });
-      }
-
-      const primary = members.find((a: any) => a.externalId === req.params.orderCode);
-      const primaryId = primary?.id || members[0].id;
-
-      res.json({
-        found: true,
-        members: members.map((a: any) => ({
-          id: a.id, firstName: a.firstName, lastName: a.lastName,
-          email: a.email, company: a.company, title: a.title,
-          participantType: a.participantType, checkedIn: a.checkedIn,
-          checkedInAt: a.checkedInAt, badgePrinted: a.badgePrinted,
-          externalId: a.externalId, orderCode: a.orderCode,
-        })),
-        primaryId,
-        checkedInCount: members.filter((a: any) => a.checkedIn).length,
-        totalCount: members.length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in staff group lookup");
-      res.status(500).json({ error: "Group lookup failed" });
-    }
-  });
-
-  // Staff batch group check-in
-  app.post("/api/staff/group-checkin", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const { attendeeIds, checkedInBy } = req.body;
-      if (!Array.isArray(attendeeIds) || attendeeIds.length === 0) {
-        return res.status(400).json({ error: "attendeeIds must be a non-empty array" });
-      }
-
-      const results = [];
-      const now = new Date();
-
-      for (const attendeeId of attendeeIds) {
-        try {
-          const attendee = await storage.getAttendee(attendeeId);
-          if (!attendee || attendee.eventId !== event.id) {
-            results.push({ attendeeId, success: false, error: "Attendee not found" });
-            continue;
-          }
-          if (attendee.checkedIn) {
-            results.push({ attendeeId, success: true, alreadyCheckedIn: true });
-            continue;
-          }
-          const updated = await storage.updateAttendee(attendeeId, {
-            checkedIn: true,
-            checkedInAt: now,
-          });
-          results.push({ attendeeId, success: true, alreadyCheckedIn: false });
-
-          try {
-            const integration = await checkinSyncService.getIntegrationForEvent(event);
-            if (integration) {
-              void checkinSyncService.sendCheckinSync(updated, event, integration, checkedInBy || "Staff Group");
-            }
-          } catch (syncErr) {
-            logger.warn({ err: syncErr }, `Sync failed for attendee ${attendeeId} in staff group check-in`);
-          }
-        } catch (err) {
-          results.push({ attendeeId, success: false, error: "Check-in failed" });
-        }
-      }
-
-      res.json({
-        success: true,
-        results,
-        checkedIn: results.filter(r => r.success && !r.alreadyCheckedIn).length,
-        alreadyCheckedIn: results.filter(r => r.alreadyCheckedIn).length,
-        failed: results.filter(r => !r.success).length,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error in staff group check-in");
-      res.status(500).json({ error: "Group check-in failed" });
-    }
-  });
-
-  app.post("/api/staff/attendees", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-
-      if (!event.tempStaffSettings?.allowWalkins) {
-        return res.status(403).json({ error: "Walk-in attendee creation is not enabled for this event" });
-      }
-
-      const { firstName, lastName, email, participantType, company, title } = req.body;
-
-      if (typeof firstName !== 'string' || typeof lastName !== 'string' || typeof email !== 'string' || typeof participantType !== 'string') {
-        return res.status(400).json({ error: "firstName, lastName, email, and participantType must be strings" });
-      }
-
-      const trimmedFirstName = firstName.trim();
-      const trimmedLastName = lastName.trim();
-      const trimmedEmail = email.trim().toLowerCase();
-      const trimmedParticipantType = participantType.trim();
-
-      if (!trimmedFirstName || !trimmedLastName || !trimmedEmail || !trimmedParticipantType) {
-        return res.status(400).json({ error: "First name, last name, email, and attendee type are required" });
-      }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(trimmedEmail)) {
-        return res.status(400).json({ error: "Invalid email address" });
-      }
-
-      const sanitizedData = sanitizeAttendeeData({
-        firstName: trimmedFirstName,
-        lastName: trimmedLastName,
-        email: trimmedEmail,
-        company: (typeof company === 'string' ? company.trim() : null) || null,
-        title: (typeof title === 'string' ? title.trim() : null) || null,
-        participantType: trimmedParticipantType,
-      });
-
-      const attendee = await storage.createAttendee({
-        eventId: event.id,
-        firstName: sanitizedData.firstName,
-        lastName: sanitizedData.lastName,
-        email: sanitizedData.email,
-        company: sanitizedData.company,
-        title: sanitizedData.title,
-        participantType: sanitizedData.participantType,
-        registrationStatus: "Registered",
-      });
-
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'add_walkin',
-        targetId: attendee.id,
-        metadata: {
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          attendeeEmail: attendee.email,
-          participantType: attendee.participantType,
-          staffName: session.staffName,
-        },
-      });
-
-      {
-        const integration = await checkinSyncService.getIntegrationForEvent(event);
-        if (integration) {
-          void checkinSyncService.sendWalkinRegistrationSync(attendee, event, integration, session.staffName)
-            .then(result => {
-              if (!result.success) {
-                logger.warn({ err: result.error }, 'Staff walk-in registration sync failed');
-              }
-            })
-            .catch(err => logger.error({ err }, 'Staff walk-in registration sync error'));
-        }
-      }
-
-      res.status(201).json({
-        id: attendee.id,
-        firstName: attendee.firstName,
-        lastName: attendee.lastName,
-        email: attendee.email,
-        company: attendee.company,
-        title: attendee.title,
-        participantType: attendee.participantType,
-        checkedIn: attendee.checkedIn,
-        checkedInAt: attendee.checkedInAt,
-        badgePrinted: attendee.badgePrinted,
-        badgePrintedAt: attendee.badgePrintedAt,
-        externalId: attendee.externalId,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error creating walk-in attendee");
-      res.status(500).json({ error: "Failed to create attendee" });
-    }
-  });
-
-  // Get sessions for temp staff event
-  app.get("/api/staff/sessions", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const settings = event.tempStaffSettings!;
-      
-      let sessions = await storage.getSessions(event.id);
-      
-      // Filter to allowed sessions if specified
-      if (settings.allowedSessionIds && settings.allowedSessionIds.length > 0) {
-        sessions = sessions.filter(s => settings.allowedSessionIds!.includes(s.id));
-      }
-
-      // Get check-in counts for each session
-      const sessionsWithCounts = await Promise.all(
-        sessions.map(async (s) => {
-          const checkins = await storage.getSessionCheckins(s.id);
-          const activeCheckins = checkins.filter(c => c.action === 'checkin').length;
-          const checkouts = checkins.filter(c => c.action === 'checkout').length;
-          
-          return {
-            id: s.id,
-            name: s.name,
-            description: s.description,
-            location: s.location,
-            startTime: s.startTime,
-            endTime: s.endTime,
-            capacity: s.capacity,
-            checkedInCount: activeCheckins - checkouts,
-            restrictToRegistered: s.restrictToRegistered,
-          };
-        })
-      );
-
-      res.json(sessionsWithCounts);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching sessions for temp staff");
-      res.status(500).json({ error: "Failed to fetch sessions" });
-    }
-  });
-
-  // Get session registrations with attendee details for temp staff
-  app.get("/api/staff/sessions/:sessionId/registrations", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const { sessionId } = req.params;
-      const settings = event.tempStaffSettings!;
-
-      // Verify session exists and belongs to this event
-      const session = await storage.getSession(sessionId);
-      if (!session || session.eventId !== event.id) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      // Check if session is in allowed list
-      if (settings.allowedSessionIds && settings.allowedSessionIds.length > 0) {
-        if (!settings.allowedSessionIds.includes(sessionId)) {
-          return res.status(403).json({ error: "You do not have access to this session" });
-        }
-      }
-
-      // Get registrations for this session
-      const registrations = await storage.getSessionRegistrations(sessionId);
-      
-      // Get attendee details for each registration
-      const registrationsWithAttendees = await Promise.all(
-        registrations.filter(r => r.status === "registered").map(async (reg) => {
-          const attendee = await storage.getAttendee(reg.attendeeId);
-          if (!attendee) return null;
-          
-          // Check if attendee is checked into this session
-          const isCheckedIn = await storage.isAttendeeCheckedIntoSession(sessionId, reg.attendeeId);
-          
-          return {
-            registrationId: reg.id,
-            attendee: {
-              id: attendee.id,
-              firstName: attendee.firstName,
-              lastName: attendee.lastName,
-              email: attendee.email,
-              company: attendee.company,
-              title: attendee.title,
-              participantType: attendee.participantType,
-              checkedIn: attendee.checkedIn,
-              externalId: attendee.externalId,
-            },
-            sessionCheckedIn: isCheckedIn,
-            registeredAt: reg.registeredAt,
-          };
-        })
-      );
-
-      res.json(registrationsWithAttendees.filter(r => r !== null));
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching session registrations");
-      res.status(500).json({ error: "Failed to fetch session registrations" });
-    }
-  });
-
-  // Temp staff event-level check-in
-  app.post("/api/staff/checkin", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { attendeeId } = req.body;
-
-      if (!attendeeId) {
-        return res.status(400).json({ error: "attendeeId is required" });
-      }
-
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Verify attendee belongs to this event
-      if (attendee.eventId !== event.id) {
-        return res.status(403).json({ error: "Attendee does not belong to this event" });
-      }
-
-      // Check if already checked in
-      if (attendee.checkedIn) {
-        return res.status(409).json({ 
-          error: "Attendee is already checked in",
-          alreadyCheckedIn: true,
-          checkedInAt: attendee.checkedInAt,
-        });
-      }
-
-      // Update attendee check-in status and set registrationStatus to 'Attended'
-      const updatedAttendee = await storage.updateAttendee(attendeeId, {
-        checkedIn: true,
-        checkedInAt: new Date(),
-        registrationStatus: 'Attended',
-      } as any);
-
-      // Log the check-in
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'checkin',
-        targetId: attendeeId,
-        metadata: {
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          staffName: session.staffName,
-        },
-      });
-
-      // Send real-time sync to external system (async, non-blocking)
-      if (updatedAttendee) {
-        const integration = await checkinSyncService.getIntegrationForEvent(event);
-        if (integration) {
-          void checkinSyncService.sendCheckinSync(updatedAttendee, event, integration, session.staffName)
-            .then(result => {
-              if (!result.success) {
-                logger.warn({ err: result.error }, 'Check-in sync failed');
-              }
-            })
-            .catch(err => logger.error({ err: err }, 'Check-in sync error'));
-        }
-      }
-
-      // Send SMS notifications based on notification rules (async, non-blocking)
-      if (updatedAttendee) {
-        void (async () => {
-          try {
-            const { smsService } = await import('./services/sms-service');
-            if (!smsService.isConfigured()) {
-              return;
-            }
-            
-            const rules = await storage.getActiveNotificationRulesForAttendee(
-              event.id,
-              {
-                participantType: updatedAttendee.participantType,
-                company: updatedAttendee.company,
-                firstName: updatedAttendee.firstName,
-                lastName: updatedAttendee.lastName,
-              }
-            );
-            
-            if (rules.length === 0) return;
-            
-            for (const rule of rules) {
-              const recipients = (rule.smsRecipients as Array<{ phoneNumber: string; name?: string }>) || [];
-              if (recipients.length === 0) continue;
-              
-              let message = rule.customMessage || 'Check-in alert:';
-              if (rule.includeAttendeeName) {
-                message += ` ${updatedAttendee.firstName} ${updatedAttendee.lastName}`;
-              }
-              if (rule.includeCompany && updatedAttendee.company) {
-                message += ` (${updatedAttendee.company})`;
-              }
-              message += ` has checked in`;
-              if (rule.includeCheckinTime) {
-                const time = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-                message += ` at ${time}`;
-              }
-              message += ` - ${event.name}`;
-              
-              for (const recipient of recipients) {
-                void smsService.sendSMS({ to: recipient.phoneNumber, message })
-                  .then(result => {
-                    if (result.success) {
-                      logger.info(`SMS sent to ${recipient.phoneNumber} for check-in: ${updatedAttendee.firstName} ${updatedAttendee.lastName}`);
-                    } else {
-                      logger.warn({ err: result.error }, `SMS failed to ${recipient.phoneNumber}`);
-                    }
-                  })
-                  .catch(err => logger.error({ err: err }, 'SMS error'));
-              }
-            }
-          } catch (err) {
-            logger.error({ err: err }, 'Error processing check-in notifications');
-          }
-        })();
-      }
-
-      // Get badge template if print preview is enabled using the resolver
-      let badgeTemplate = null;
-      const settings = event.tempStaffSettings;
-      if (settings?.printPreviewOnCheckin) {
-        // Use the resolver which checks event overrides first, then falls back
-        const result = await badgeTemplateResolver.resolveTemplateForParticipantType(
-          event.id, 
-          updatedAttendee?.participantType || 'General'
-        );
-        badgeTemplate = result.template;
-        
-        if (!badgeTemplate) {
-          logger.warn(`Print preview enabled but no badge template found for event ${event.id}`);
-        }
-      }
-
-      res.json({
-        success: true,
-        attendee: {
-          id: updatedAttendee?.id,
-          firstName: updatedAttendee?.firstName,
-          lastName: updatedAttendee?.lastName,
-          email: updatedAttendee?.email,
-          company: updatedAttendee?.company,
-          title: updatedAttendee?.title,
-          participantType: updatedAttendee?.participantType,
-          registrationStatus: updatedAttendee?.registrationStatus,
-          checkedIn: updatedAttendee?.checkedIn,
-          checkedInAt: updatedAttendee?.checkedInAt,
-          externalId: updatedAttendee?.externalId,
-          badgePrinted: updatedAttendee?.badgePrinted,
-          badgePrintedAt: updatedAttendee?.badgePrintedAt,
-          customFields: updatedAttendee?.customFields,
-        },
-        // Only include printPreview if enabled AND template was found
-        printPreview: (settings?.printPreviewOnCheckin && badgeTemplate) ? {
-          enabled: true,
-          template: {
-            id: badgeTemplate.id,
-            name: badgeTemplate.name,
-            width: badgeTemplate.width,
-            height: badgeTemplate.height,
-            backgroundColor: badgeTemplate.backgroundColor,
-            textColor: badgeTemplate.textColor,
-            accentColor: badgeTemplate.accentColor,
-            fontFamily: badgeTemplate.fontFamily,
-            includeQR: badgeTemplate.includeQR,
-            qrPosition: badgeTemplate.qrPosition,
-            qrCodeConfig: badgeTemplate.qrCodeConfig,
-            mergeFields: badgeTemplate.mergeFields,
-            imageElements: badgeTemplate.imageElements,
-          },
-        } : undefined,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error during temp staff check-in");
-      res.status(500).json({ error: "Check-in failed" });
-    }
-  });
-
-  // Temp staff mark badge as printed
-  app.post("/api/staff/badge-printed", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { attendeeId } = req.body;
-
-      if (!attendeeId) {
-        return res.status(400).json({ error: "attendeeId is required" });
-      }
-
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Verify attendee belongs to this event
-      if (attendee.eventId !== event.id) {
-        return res.status(403).json({ error: "Attendee does not belong to this event" });
-      }
-
-      // Update badge printed status and set registrationStatus to 'Attended'
-      const updatedAttendee = await storage.updateAttendee(attendeeId, {
-        badgePrinted: true,
-        badgePrintedAt: new Date(),
-        registrationStatus: 'Attended',
-      } as any);
-
-      // Log the badge print
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'badge_print',
-        targetId: attendeeId,
-        metadata: {
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          staffName: session.staffName,
-        },
-      });
-
-      res.json({
-        success: true,
-        attendee: {
-          id: updatedAttendee?.id,
-          badgePrinted: updatedAttendee?.badgePrinted,
-          badgePrintedAt: updatedAttendee?.badgePrintedAt,
-          registrationStatus: updatedAttendee?.registrationStatus,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error marking badge as printed");
-      res.status(500).json({ error: "Failed to mark badge as printed" });
-    }
-  });
-
-  // Temp staff revert check-in
-  app.post("/api/staff/revert-checkin", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { attendeeId } = req.body;
-
-      if (!attendeeId) {
-        return res.status(400).json({ error: "attendeeId is required" });
-      }
-
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Verify attendee belongs to this event
-      if (attendee.eventId !== event.id) {
-        return res.status(403).json({ error: "Attendee does not belong to this event" });
-      }
-
-      // Check if not checked in
-      if (!attendee.checkedIn) {
-        return res.status(409).json({ 
-          error: "Attendee is not checked in",
-          notCheckedIn: true,
-        });
-      }
-
-      // Revert check-in status - restore registrationStatus to 'Registered'
-      const updatedAttendee = await storage.updateAttendee(attendeeId, {
-        checkedIn: false,
-        checkedInAt: null,
-        registrationStatus: 'Registered',
-        badgePrinted: false,
-        badgePrintedAt: null,
-      } as any);
-
-      await storage.deleteAttendeeWorkflowResponses(attendeeId, event.id);
-      await storage.deleteAttendeeSignaturesByAttendee(attendeeId, event.id);
-
-      // Send real-time sync revert to external system (async, non-blocking)
-      if (updatedAttendee && event.integrationId) {
-        const integration = await storage.getCustomerIntegration(event.integrationId);
-        if (integration) {
-          void checkinSyncService.sendCheckinRevertSync(updatedAttendee, event, integration, session.staffName)
-            .then(result => {
-              if (!result.success) {
-                logger.warn({ err: result.error }, 'Staff check-in revert sync failed');
-              }
-            })
-            .catch(err => logger.error({ err: err }, 'Staff check-in revert sync error'));
-        }
-      }
-
-      // Log the revert
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'revert_checkin',
-        targetId: attendeeId,
-        metadata: {
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          staffName: session.staffName,
-        },
-      });
-
-      res.json({
-        success: true,
-        attendee: {
-          id: updatedAttendee?.id,
-          firstName: updatedAttendee?.firstName,
-          lastName: updatedAttendee?.lastName,
-          checkedIn: updatedAttendee?.checkedIn,
-          checkedInAt: updatedAttendee?.checkedInAt,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error reverting check-in");
-      res.status(500).json({ error: "Revert check-in failed" });
-    }
-  });
-
-  // Temp staff network print to Zebra printer via IP:9100 (for iOS/mobile support)
-  app.post("/api/staff/network-print", largeBodyParser, staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { printerIp, zplData, port = 9100 } = req.body;
-
-      if (!printerIp) {
-        return res.status(400).json({ error: "printerIp is required" });
-      }
-      if (!zplData) {
-        return res.status(400).json({ error: "zplData is required" });
-      }
-
-      // Validate IP address format
-      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-      if (!ipRegex.test(printerIp)) {
-        return res.status(400).json({ error: "Invalid IP address format" });
-      }
-
-      // Use Node.js net module to send ZPL to printer
-      const net = await import('net');
-      
-      const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-        const client = new net.Socket();
-        const timeout = 10000; // 10 second timeout
-
-        client.setTimeout(timeout);
-
-        client.on('connect', () => {
-          client.write(zplData, 'utf8', (err) => {
-            if (err) {
-              client.destroy();
-              resolve({ success: false, error: err.message });
-            } else {
-              // Give the printer a moment to receive the data
-              setTimeout(() => {
-                client.destroy();
-                resolve({ success: true });
-              }, 500);
-            }
-          });
-        });
-
-        client.on('timeout', () => {
-          client.destroy();
-          resolve({ success: false, error: 'Connection timed out' });
-        });
-
-        client.on('error', (err) => {
-          client.destroy();
-          resolve({ success: false, error: err.message });
-        });
-
-        client.connect(port, printerIp);
-      });
-
-      if (!result.success) {
-        return res.status(500).json({ 
-          error: "Print failed", 
-          details: result.error 
-        });
-      }
-
-      // Log the network print
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'network_print',
-        targetId: printerIp,
-        metadata: {
-          printerIp,
-          port,
-          staffName: session.staffName,
-          zplLength: zplData.length,
-        },
-      });
-
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error sending network print");
-      res.status(500).json({ error: "Network print failed" });
-    }
-  });
-
-  // Temp staff test printer connection
-  app.post("/api/staff/test-printer", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const { printerIp, port = 9100 } = req.body;
-
-      if (!printerIp) {
-        return res.status(400).json({ error: "printerIp is required" });
-      }
-
-      // Validate IP address format
-      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-      if (!ipRegex.test(printerIp)) {
-        return res.status(400).json({ error: "Invalid IP address format" });
-      }
-
-      const net = await import('net');
-      
-      const result = await new Promise<{ connected: boolean; error?: string }>((resolve) => {
-        const client = new net.Socket();
-        const timeout = 5000; // 5 second timeout
-
-        client.setTimeout(timeout);
-
-        client.on('connect', () => {
-          // Send a simple ZPL status query
-          const testZpl = '^XA^XZ'; // Minimal valid ZPL command
-          client.write(testZpl, 'utf8', () => {
-            client.destroy();
-            resolve({ connected: true });
-          });
-        });
-
-        client.on('timeout', () => {
-          client.destroy();
-          resolve({ connected: false, error: 'Connection timed out' });
-        });
-
-        client.on('error', (err) => {
-          client.destroy();
-          resolve({ connected: false, error: err.message });
-        });
-
-        client.connect(port, printerIp);
-      });
-
-      res.json(result);
-    } catch (error) {
-      logger.error({ err: error }, "Error testing printer connection");
-      res.status(500).json({ connected: false, error: "Connection test failed" });
-    }
-  });
-
-  // Temp staff update attendee badge data
-  app.patch("/api/staff/attendees/:attendeeId", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const session = req.staffSession!;
-      const event = req.staffEvent!;
-      const { attendeeId } = req.params;
-      const { firstName, lastName, company, title } = req.body;
-
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Verify attendee belongs to this event
-      if (attendee.eventId !== event.id) {
-        return res.status(403).json({ error: "Attendee does not belong to this event" });
-      }
-
-      const updateData: any = {};
-      if (firstName !== undefined) updateData.firstName = sanitizeHtml(firstName);
-      if (lastName !== undefined) updateData.lastName = sanitizeHtml(lastName);
-      if (company !== undefined) updateData.company = sanitizeHtml(company);
-      if (title !== undefined) updateData.title = sanitizeHtml(title);
-
-      const updatedAttendee = await storage.updateAttendee(attendeeId, updateData);
-
-      // Log the update
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'update_attendee',
-        targetId: attendeeId,
-        metadata: {
-          attendeeName: `${updatedAttendee?.firstName} ${updatedAttendee?.lastName}`,
-          staffName: session.staffName,
-          updatedFields: Object.keys(updateData),
-        },
-      });
-
-      res.json({
-        success: true,
-        attendee: updatedAttendee,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error updating attendee");
-      res.status(500).json({ error: "Failed to update attendee" });
-    }
-  });
-
-  // Temp staff session check-in
-  app.post("/api/staff/sessions/:sessionId/checkin", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const staffSession = req.staffSession!;
-      const event = req.staffEvent!;
-      const { sessionId } = req.params;
-      const { attendeeId } = req.body;
-
-      if (!attendeeId) {
-        return res.status(400).json({ error: "attendeeId is required" });
-      }
-
-      // Verify session exists and belongs to this event
-      const eventSession = await storage.getSession(sessionId);
-      if (!eventSession || eventSession.eventId !== event.id) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      // Check if session is in allowed list
-      const settings = event.tempStaffSettings!;
-      if (settings.allowedSessionIds && settings.allowedSessionIds.length > 0) {
-        if (!settings.allowedSessionIds.includes(sessionId)) {
-          return res.status(403).json({ error: "You do not have access to this session" });
-        }
-      }
-
-      // Verify attendee exists and belongs to this event
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Check if session restricts to registered attendees
-      if (eventSession.restrictToRegistered) {
-        const registration = await storage.getSessionRegistrationByAttendee(sessionId, attendeeId);
-        if (!registration || registration.status !== "registered") {
-          return res.status(403).json({ 
-            error: "This session is restricted to pre-registered attendees only",
-            isRegistered: !!registration,
-            registrationStatus: registration?.status,
-          });
-        }
-      }
-
-      // Check if already checked in
-      const isCheckedIn = await storage.isAttendeeCheckedIntoSession(sessionId, attendeeId);
-      if (isCheckedIn) {
-        return res.status(409).json({ error: "Attendee is already checked in to this session", alreadyCheckedIn: true });
-      }
-
-      // Create session check-in
-      const checkin = await storage.createSessionCheckin({
-        sessionId,
-        attendeeId,
-        action: "checkin",
-        source: "staff",
-        checkedInBy: staffSession.staffName,
-      });
-
-      // Log the session check-in
-      await storage.createStaffActivityLog({
-        sessionId: staffSession.id,
-        eventId: event.id,
-        action: 'session_checkin',
-        targetId: sessionId,
-        metadata: {
-          attendeeId,
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          sessionName: eventSession.name,
-          staffName: staffSession.staffName,
-        },
-      });
-
-      // Fire-and-forget: sync session check-in to external system
-      const integration = await checkinSyncService.getIntegrationForEvent(event);
-      if (integration) {
-        void checkinSyncService.sendSessionCheckinSync(attendee, eventSession, event, integration)
-          .catch(err => logger.error({ err: err }, 'Staff error'));
-      }
-
-      res.status(201).json({
-        success: true,
-        checkin,
-        attendee: {
-          id: attendee.id,
-          firstName: attendee.firstName,
-          lastName: attendee.lastName,
-          company: attendee.company,
-        },
-        session: {
-          id: eventSession.id,
-          name: eventSession.name,
-          location: eventSession.location,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error during temp staff session check-in");
-      res.status(500).json({ error: "Session check-in failed" });
-    }
-  });
-
-  // Staff session check-out endpoint
-  app.post("/api/staff/sessions/:sessionId/checkout", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const staffSession = req.staffSession!;
-      const event = req.staffEvent!;
-      const { sessionId } = req.params;
-      const { attendeeId } = req.body;
-
-      if (!attendeeId) {
-        return res.status(400).json({ error: "attendeeId is required" });
-      }
-
-      // Verify session exists and belongs to this event
-      const eventSession = await storage.getSession(sessionId);
-      if (!eventSession || eventSession.eventId !== event.id) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      // Check if session is in allowed list
-      const settings = event.tempStaffSettings!;
-      if (settings.allowedSessionIds && settings.allowedSessionIds.length > 0) {
-        if (!settings.allowedSessionIds.includes(sessionId)) {
-          return res.status(403).json({ error: "You do not have access to this session" });
-        }
-      }
-
-      // Verify attendee exists and belongs to this event
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      // Check if currently checked in
-      const isCheckedIn = await storage.isAttendeeCheckedIntoSession(sessionId, attendeeId);
-      if (!isCheckedIn) {
-        return res.status(409).json({ error: "Attendee is not checked in to this session", notCheckedIn: true });
-      }
-
-      // Create session check-out
-      const checkout = await storage.createSessionCheckin({
-        sessionId,
-        attendeeId,
-        action: "checkout",
-        source: "staff",
-        checkedInBy: staffSession.staffName,
-      });
-
-      // Log the session check-out
-      await storage.createStaffActivityLog({
-        sessionId: staffSession.id,
-        eventId: event.id,
-        action: 'session_checkout',
-        targetId: sessionId,
-        metadata: {
-          attendeeId,
-          attendeeName: `${attendee.firstName} ${attendee.lastName}`,
-          sessionName: eventSession.name,
-          staffName: staffSession.staffName,
-        },
-      });
-
-      res.status(201).json({
-        success: true,
-        checkout,
-        attendee: {
-          id: attendee.id,
-          firstName: attendee.firstName,
-          lastName: attendee.lastName,
-          company: attendee.company,
-        },
-        session: {
-          id: eventSession.id,
-          name: eventSession.name,
-          location: eventSession.location,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error during temp staff session check-out");
-      res.status(500).json({ error: "Session check-out failed" });
-    }
-  });
-
-  // Get temp staff activity logs for event (admin only)
-  app.get("/api/events/:eventId/staff-activity", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      // Verify user has access to this event
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const logs = await storage.getStaffActivityLogs(req.params.eventId);
-
-      // Enrich with session info
-      const enrichedLogs = await Promise.all(
-        logs.map(async (log) => {
-          const session = await storage.getStaffSession(log.sessionId);
-          return {
-            ...log,
-            staffName: session?.staffName || 'Unknown',
-          };
-        })
-      );
-
-      res.json(enrichedLogs);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching temp staff activity");
-      res.status(500).json({ error: "Failed to fetch activity logs" });
-    }
-  });
-
-  // Get active temp staff sessions for event (admin only)
-  app.get("/api/events/:eventId/staff-sessions", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      // Verify user has access to this event
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const sessions = await storage.getStaffSessions(req.params.eventId);
-      
-      // Filter to active sessions only
-      const now = new Date();
-      const activeSessions = sessions.filter(s => s.isActive && new Date(s.expiresAt) > now);
-
-      res.json(activeSessions.map(s => ({
-        id: s.id,
-        staffName: s.staffName,
-        createdAt: s.createdAt,
-        expiresAt: s.expiresAt,
-      })));
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching temp staff sessions");
-      res.status(500).json({ error: "Failed to fetch sessions" });
-    }
-  });
-
-  // Get badge templates for temp staff (for badge printing)
-  app.get("/api/staff/badge-templates", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const settings = event.tempStaffSettings!;
-      
-      // Get customer's badge templates
-      const templates = await storage.getBadgeTemplates(event.customerId);
-      
-      // If a specific badge template is set for temp staff, filter to just that one
-      if (settings.badgeTemplateId) {
-        const template = templates.find(t => t.id === settings.badgeTemplateId);
-        if (template) {
-          return res.json([template]);
-        }
-      }
-      
-      // Otherwise, return event's selected templates
-      if (event.selectedTemplates.length > 0) {
-        const selectedTemplates = templates.filter(t => event.selectedTemplates.includes(t.id) || event.selectedTemplates.includes(t.participantType));
-        if (selectedTemplates.length > 0) {
-          return res.json(selectedTemplates);
-        }
-      }
-      
-      // Fallback to all templates
-      res.json(templates);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching badge templates for temp staff");
-      res.status(500).json({ error: "Failed to fetch badge templates" });
-    }
-  });
-
-  // Resolve badge template for a specific attendee based on participant type
-  app.get("/api/staff/attendees/:attendeeId/resolve-template", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const { attendeeId } = req.params;
-      
-      const attendee = await storage.getAttendee(attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-      
-      const result = await badgeTemplateResolver.resolveTemplateForAttendee(attendee, event.id);
-      
-      res.json({
-        template: result.template,
-        resolutionPath: result.resolutionPath,
-        participantType: result.participantType,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error resolving template for temp staff attendee");
-      res.status(500).json({ error: "Failed to resolve template" });
-    }
-  });
-
-  // Public endpoint to check if temp staff access is available for an event
-  app.get("/api/staff/events/:eventId/status", async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      const settings = event.tempStaffSettings;
-      const customer = await storage.getCustomer(event.customerId);
-
-      if (!settings?.enabled) {
-        return res.json({
-          available: false,
-          reason: "Temp staff access is not enabled for this event",
-        });
-      }
-
-      const now = new Date();
-
-      // Only check time constraints if they are set
-      if (settings.startTime) {
-        const startTime = new Date(settings.startTime);
-        if (now < startTime) {
-          return res.json({
-            available: false,
-            reason: "Temp staff access has not started yet",
-            startsAt: settings.startTime,
-            event: {
-              id: event.id,
-              name: event.name,
-              customerName: customer?.name,
-            },
-          });
-        }
-      }
-
-      if (settings.endTime) {
-        const endTime = new Date(settings.endTime);
-        if (now > endTime) {
-          return res.json({
-            available: false,
-            reason: "Temp staff access has ended",
-            endedAt: settings.endTime,
-            event: {
-              id: event.id,
-              name: event.name,
-              customerName: customer?.name,
-            },
-          });
-        }
-      }
-
-      res.json({
-        available: true,
-        event: {
-          id: event.id,
-          name: event.name,
-          eventDate: event.eventDate,
-          customerName: customer?.name,
-        },
-        accessWindow: {
-          startTime: settings.startTime || null,
-          endTime: settings.endTime || null,
-        },
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error checking temp staff status");
-      res.status(500).json({ error: "Failed to check status" });
-    }
-  });
-
-  // =====================
-  // Event Workflow Configuration Routes
-  // =====================
-
-  // Get workflow config with all steps and associated data for an event
-  app.get("/api/events/:eventId/workflow", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const workflow = await storage.getEventWorkflowWithSteps(req.params.eventId);
-      res.json(workflow || null);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching workflow");
-      res.status(500).json({ error: "Failed to fetch workflow" });
-    }
-  });
-
-  // Update workflow (enable/disable)
-  app.patch("/api/events/:eventId/workflow", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      // Check if workflow config exists
-      let config = await storage.getEventWorkflowConfig(req.params.eventId);
-      
-      if (!config) {
-        // Create a new workflow config if it doesn't exist
-        config = await storage.createEventWorkflowConfig({
-          eventId: req.params.eventId,
-          enabled: req.body.enabled ?? false,
-        });
-      } else {
-        // Update existing config
-        config = await storage.updateEventWorkflowConfig(req.params.eventId, {
-          enabled: req.body.enabled,
-        });
-      }
-
-      // Return the full workflow with steps
-      const workflow = await storage.getEventWorkflowWithSteps(req.params.eventId);
-      res.json(workflow);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating workflow");
-      res.status(500).json({ error: "Failed to update workflow" });
-    }
-  });
-
-  // Create or update workflow config
-  app.put("/api/events/:eventId/workflow/config", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const data = insertEventWorkflowConfigSchema.omit({ eventId: true }).parse(req.body);
-      
-      // Check if config exists
-      const existing = await storage.getEventWorkflowConfig(req.params.eventId);
-      
-      let config;
-      if (existing) {
-        config = await storage.updateEventWorkflowConfig(req.params.eventId, data);
-      } else {
-        config = await storage.createEventWorkflowConfig({
-          eventId: req.params.eventId,
-          ...data,
-        });
-      }
-
-      res.json(config);
-    } catch (error) {
-      logger.error({ err: error }, "Error saving workflow config");
-      res.status(500).json({ error: "Failed to save workflow config" });
-    }
-  });
-
-  // Delete workflow config
-  app.delete("/api/events/:eventId/workflow/config", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      await storage.deleteEventWorkflowConfig(req.params.eventId);
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error deleting workflow config");
-      res.status(500).json({ error: "Failed to delete workflow config" });
-    }
-  });
-
-  // =====================
-  // Workflow Steps Routes
-  // =====================
-
-  // Get workflow steps for an event
-  app.get("/api/events/:eventId/workflow/steps", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const steps = await storage.getEventWorkflowSteps(req.params.eventId);
-      res.json(steps);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching workflow steps");
-      res.status(500).json({ error: "Failed to fetch workflow steps" });
-    }
-  });
-
-  // Create a workflow step
-  app.post("/api/events/:eventId/workflow/steps", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const data = insertEventWorkflowStepSchema.omit({ eventId: true }).parse(req.body);
-      
-      // Ensure workflow config exists
-      let config = await storage.getEventWorkflowConfig(req.params.eventId);
-      if (!config) {
-        config = await storage.createEventWorkflowConfig({
-          eventId: req.params.eventId,
-          enabled: true,
-        });
-      }
-
-      const step = await storage.createEventWorkflowStep({
-        eventId: req.params.eventId,
-        ...data,
-      });
-
-      res.json(step);
-    } catch (error) {
-      logger.error({ err: error }, "Error creating workflow step");
-      res.status(500).json({ error: "Failed to create workflow step" });
-    }
-  });
-
-  // Update a workflow step
-  app.patch("/api/events/:eventId/workflow/steps/:stepId", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const step = await storage.getEventWorkflowStep(req.params.stepId);
-      if (!step || step.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Step not found" });
-      }
-
-      const data = insertEventWorkflowStepSchema.partial().parse(req.body);
-      const updated = await storage.updateEventWorkflowStep(req.params.stepId, data);
-
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating workflow step");
-      res.status(500).json({ error: "Failed to update workflow step" });
-    }
-  });
-
-  // Delete a workflow step
-  app.delete("/api/events/:eventId/workflow/steps/:stepId", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const step = await storage.getEventWorkflowStep(req.params.stepId);
-      if (!step || step.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Step not found" });
-      }
-
-      await storage.deleteEventWorkflowStep(req.params.stepId);
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error deleting workflow step");
-      res.status(500).json({ error: "Failed to delete workflow step" });
-    }
-  });
-
-  // Reorder workflow steps
-  app.put("/api/events/:eventId/workflow/steps/reorder", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const { stepIds } = z.object({ stepIds: z.array(z.string()) }).parse(req.body);
-      const steps = await storage.reorderEventWorkflowSteps(req.params.eventId, stepIds);
-
-      res.json(steps);
-    } catch (error) {
-      logger.error({ err: error }, "Error reordering workflow steps");
-      res.status(500).json({ error: "Failed to reorder workflow steps" });
-    }
-  });
-
-  // =====================
-  // Buyer Questions Routes
-  // =====================
-
-  // Get questions for a step
-  app.get("/api/events/:eventId/workflow/steps/:stepId/questions", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const questions = await storage.getEventBuyerQuestions(req.params.stepId);
-      res.json(questions);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching questions");
-      res.status(500).json({ error: "Failed to fetch questions" });
-    }
-  });
-
-  // Create a buyer question (max 3 per step)
-  app.post("/api/events/:eventId/workflow/steps/:stepId/questions", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const step = await storage.getEventWorkflowStep(req.params.stepId);
-      if (!step || step.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Step not found" });
-      }
-
-      // Check max 3 questions limit
-      const existingQuestions = await storage.getEventBuyerQuestions(req.params.stepId);
-      if (existingQuestions.length >= 3) {
-        return res.status(400).json({ error: "Maximum 3 questions per step allowed" });
-      }
-
-      const data = insertEventBuyerQuestionSchema.omit({ eventId: true, stepId: true }).parse(req.body);
-      
-      const question = await storage.createEventBuyerQuestion({
-        eventId: req.params.eventId,
-        stepId: req.params.stepId,
-        ...data,
-      });
-
-      res.json(question);
-    } catch (error) {
-      logger.error({ err: error }, "Error creating question");
-      res.status(500).json({ error: "Failed to create question" });
-    }
-  });
-
-  // Update a buyer question
-  app.patch("/api/events/:eventId/workflow/questions/:questionId", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const question = await storage.getEventBuyerQuestion(req.params.questionId);
-      if (!question || question.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Question not found" });
-      }
-
-      const data = insertEventBuyerQuestionSchema.partial().parse(req.body);
-      const updated = await storage.updateEventBuyerQuestion(req.params.questionId, data);
-
-      res.json(updated);
-    } catch (error) {
-      logger.error({ err: error }, "Error updating question");
-      res.status(500).json({ error: "Failed to update question" });
-    }
-  });
-
-  // Delete a buyer question
-  app.delete("/api/events/:eventId/workflow/questions/:questionId", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const question = await storage.getEventBuyerQuestion(req.params.questionId);
-      if (!question || question.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Question not found" });
-      }
-
-      await storage.deleteEventBuyerQuestion(req.params.questionId);
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error deleting question");
-      res.status(500).json({ error: "Failed to delete question" });
-    }
-  });
-
-  // =====================
-  // Disclaimer Routes
-  // =====================
-
-  // Get disclaimer for a step
-  app.get("/api/events/:eventId/workflow/steps/:stepId/disclaimer", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const disclaimer = await storage.getEventDisclaimer(req.params.stepId);
-      res.json(disclaimer || null);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching disclaimer");
-      res.status(500).json({ error: "Failed to fetch disclaimer" });
-    }
-  });
-
-  // Create or update disclaimer for a step
-  app.put("/api/events/:eventId/workflow/steps/:stepId/disclaimer", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const step = await storage.getEventWorkflowStep(req.params.stepId);
-      if (!step || step.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Step not found" });
-      }
-
-      const data = insertEventDisclaimerSchema.omit({ eventId: true, stepId: true }).parse(req.body);
-      
-      // Check if disclaimer exists
-      const existing = await storage.getEventDisclaimer(req.params.stepId);
-      
-      let disclaimer;
-      if (existing) {
-        disclaimer = await storage.updateEventDisclaimer(existing.id, data);
-      } else {
-        disclaimer = await storage.createEventDisclaimer({
-          eventId: req.params.eventId,
-          stepId: req.params.stepId,
-          ...data,
-        });
-      }
-
-      res.json(disclaimer);
-    } catch (error) {
-      logger.error({ err: error }, "Error saving disclaimer");
-      res.status(500).json({ error: "Failed to save disclaimer" });
-    }
-  });
-
-  // Delete disclaimer
-  app.delete("/api/events/:eventId/workflow/disclaimers/:disclaimerId", requireAuth, async (req, res) => {
-    try {
-      const event = await storage.getEvent(req.params.eventId);
-      if (!event) {
-        return res.status(404).json({ error: "Event not found" });
-      }
-
-      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      await storage.deleteEventDisclaimer(req.params.disclaimerId);
-      res.json({ success: true });
-    } catch (error) {
-      logger.error({ err: error }, "Error deleting disclaimer");
-      res.status(500).json({ error: "Failed to delete disclaimer" });
-    }
-  });
-
-  // =====================
-  // Attendee Workflow Response Routes (for check-in flow)
-  // =====================
-
-  // Get workflow responses for an attendee
-  app.get("/api/events/:eventId/attendees/:attendeeId/workflow-responses", requireAuth, async (req, res) => {
-    try {
-      const responses = await storage.getAttendeeWorkflowResponses(
-        req.params.attendeeId,
-        req.params.eventId
-      );
-      res.json(responses);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching workflow responses");
-      res.status(500).json({ error: "Failed to fetch workflow responses" });
-    }
-  });
-
-  // Save workflow responses for an attendee (batch save)
-  app.post("/api/events/:eventId/attendees/:attendeeId/workflow-responses", requireAuth, async (req, res) => {
-    try {
-      const { responses } = z.object({
-        responses: z.array(insertAttendeeWorkflowResponseSchema.omit({ attendeeId: true, eventId: true }))
-      }).parse(req.body);
-
-      // Clear existing responses first
-      await storage.deleteAttendeeWorkflowResponses(req.params.attendeeId, req.params.eventId);
-
-      // Save new responses
-      const saved = await Promise.all(
-        responses.map(r => storage.createAttendeeWorkflowResponse({
-          attendeeId: req.params.attendeeId,
-          eventId: req.params.eventId,
-          ...r,
-        }))
-      );
-
-      res.json(saved);
-    } catch (error) {
-      logger.error({ err: error }, "Error saving workflow responses");
-      res.status(500).json({ error: "Failed to save workflow responses" });
-    }
-  });
-
-  // =====================
-  // Attendee Signature Routes
-  // =====================
-
-  // Get signatures for an attendee
-  app.get("/api/events/:eventId/attendees/:attendeeId/signatures", requireAuth, async (req, res) => {
-    try {
-      const signatures = await storage.getAttendeeSignatures(req.params.attendeeId);
-      res.json(signatures);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching signatures");
-      res.status(500).json({ error: "Failed to fetch signatures" });
-    }
-  });
-
-  // Save a signature
-  app.post("/api/events/:eventId/attendees/:attendeeId/signatures", requireAuth, async (req, res) => {
-    try {
-      const data = z.object({
-        disclaimerId: z.string(),
-        signatureData: z.string(),
-      }).parse(req.body);
-
-      // Verify attendee belongs to this event
-      const attendee = await storage.getAttendee(req.params.attendeeId);
-      if (!attendee || attendee.eventId !== req.params.eventId) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-      
-      // Check if signature already exists for this disclaimer - update it if so
-      const existing = await storage.getAttendeeSignature(req.params.attendeeId, data.disclaimerId);
-      if (existing) {
-        // Update existing signature (e.g., after undo and re-check-in)
-        const updated = await storage.updateAttendeeSignature(existing.id, {
-          signatureData: data.signatureData,
-          ipAddress: req.ip || null,
-          userAgent: req.headers['user-agent'] || null,
-        });
-        return res.json(updated);
-      }
-
-      const signature = await storage.createAttendeeSignature({
-        attendeeId: req.params.attendeeId,
-        eventId: req.params.eventId,
-        disclaimerId: data.disclaimerId,
-        signatureData: data.signatureData,
-        ipAddress: req.ip || null,
-        userAgent: req.headers['user-agent'] || null,
-      });
-
-      res.json(signature);
-    } catch (error: any) {
-      logger.error({ err: error }, "Error saving signature");
-      if (error?.name === 'ZodError') {
-        return res.status(400).json({ error: "Invalid signature data", details: error.errors });
-      }
-      res.status(500).json({ error: "Failed to save signature" });
-    }
-  });
-
-  // =====================
-  // Temp Staff Workflow Routes (authenticated via temp staff token)
-  // =====================
-
-  // Get workflow for temp staff (read-only)
-  app.get("/api/staff/workflow", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      
-      const workflow = await storage.getEventWorkflowWithSteps(event.id);
-      
-      if (!workflow || !workflow.enabled || !workflow.enabledForStaff) {
-        return res.json(null);
-      }
-
-      // Filter to only enabled steps
-      const enabledSteps = workflow.steps.filter(s => s.enabled);
-      
-      res.json({
-        ...workflow,
-        steps: enabledSteps,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching workflow for temp staff");
-      res.status(500).json({ error: "Failed to fetch workflow" });
-    }
-  });
-
-  // Save workflow responses (temp staff)
-  app.post("/api/staff/attendees/:attendeeId/workflow-responses", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const session = req.staffSession!;
-      
-      // Verify attendee belongs to this event
-      const attendee = await storage.getAttendee(req.params.attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      const { responses } = z.object({
-        responses: z.array(z.object({
-          questionId: z.string(),
-          responseValue: z.string().nullable().optional(),
-          responseValues: z.array(z.string()).nullable().optional(),
-        }))
-      }).parse(req.body);
-
-      // Clear existing responses first
-      await storage.deleteAttendeeWorkflowResponses(req.params.attendeeId, event.id);
-
-      // Save new responses
-      const saved = await Promise.all(
-        responses.map(r => storage.createAttendeeWorkflowResponse({
-          attendeeId: req.params.attendeeId,
-          eventId: event.id,
-          ...r,
-        }))
-      );
-
-      // Log activity
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'workflow_responses',
-        targetId: req.params.attendeeId,
-        metadata: { responseCount: saved.length },
-      });
-
-      res.json(saved);
-    } catch (error) {
-      logger.error({ err: error }, "Error saving workflow responses (temp staff)");
-      res.status(500).json({ error: "Failed to save workflow responses" });
-    }
-  });
-
-  // Save signature (temp staff)
-  app.get("/api/staff/attendees/:attendeeId/signatures", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-
-      const attendee = await storage.getAttendee(req.params.attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      const signatures = await storage.getAttendeeSignatures(req.params.attendeeId);
-      res.json(signatures);
-    } catch (error) {
-      logger.error({ err: error }, "Error fetching signatures (temp staff)");
-      res.status(500).json({ error: "Failed to fetch signatures" });
-    }
-  });
-
-  app.post("/api/staff/attendees/:attendeeId/signatures", staffAuth as any, async (req: StaffRequest, res) => {
-    try {
-      const event = req.staffEvent!;
-      const session = req.staffSession!;
-      
-      // Verify attendee belongs to this event
-      const attendee = await storage.getAttendee(req.params.attendeeId);
-      if (!attendee || attendee.eventId !== event.id) {
-        return res.status(404).json({ error: "Attendee not found" });
-      }
-
-      const data = z.object({
-        disclaimerId: z.string(),
-        signatureData: z.string(),
-      }).parse(req.body);
-
-      // Check if signature already exists - update it if so (e.g., after undo and re-check-in)
-      const existing = await storage.getAttendeeSignature(req.params.attendeeId, data.disclaimerId);
-      if (existing) {
-        const updated = await storage.updateAttendeeSignature(existing.id, {
-          signatureData: data.signatureData,
-          ipAddress: req.ip || null,
-          userAgent: req.headers['user-agent'] || null,
-        });
-        
-        // Log activity
-        await storage.createStaffActivityLog({
-          sessionId: session.id,
-          eventId: event.id,
-          action: 'signature_updated',
-          targetId: req.params.attendeeId,
-          metadata: { disclaimerId: data.disclaimerId },
-        });
-        
-        return res.json(updated);
-      }
-
-      const signature = await storage.createAttendeeSignature({
-        attendeeId: req.params.attendeeId,
-        eventId: event.id,
-        disclaimerId: data.disclaimerId,
-        signatureData: data.signatureData,
-        ipAddress: req.ip || null,
-        userAgent: req.headers['user-agent'] || null,
-      });
-
-      // Log activity
-      await storage.createStaffActivityLog({
-        sessionId: session.id,
-        eventId: event.id,
-        action: 'signature_captured',
-        targetId: req.params.attendeeId,
-        metadata: { disclaimerId: data.disclaimerId },
-      });
-
-      res.json(signature);
-    } catch (error) {
-      logger.error({ err: error }, "Error saving signature (temp staff)");
-      res.status(500).json({ error: "Failed to save signature" });
-    }
-  });
-
-  // Badge AI assistant routes
-  app.use("/api/badge-ai", badgeAiRoutes);
-
-  // Setup assistant routes
-  app.use("/api/assistant", requireAuth, createAssistantRouter(storage));
-
-  // PDF guide downloads
-  app.get("/api/docs/event-setup.pdf", requireAuth, async (_req, res) => {
-    try {
-      const { generateEventSetupPdf } = await import("./pdf/event-setup-guide");
-      generateEventSetupPdf(res);
-    } catch (err) {
-      console.error("Failed to generate event setup PDF:", err);
-      res.status(500).json({ error: "Failed to generate PDF" });
-    }
-  });
-
-  app.get("/api/docs/account-setup.pdf", requireAuth, async (req, res) => {
-    try {
-      if ((req as any).user?.role !== "super_admin") {
-        return res.status(403).json({ error: "Forbidden" });
-      }
-      const { generateAccountSetupPdf } = await import("./pdf/account-setup-guide");
-      generateAccountSetupPdf(res);
-    } catch (err) {
-      console.error("Failed to generate account setup PDF:", err);
-      res.status(500).json({ error: "Failed to generate PDF" });
-    }
-  });
 
   // =====================
   // System Settings Routes (Super Admin only, except public login background)
@@ -10821,16 +5597,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/settings/feature-flags", requireAuth, async (req, res) => {
     try {
+      // Platform-wide settings (not per-account)
       const badgeFlipSetting = await storage.getSystemSetting("feature_badge_flip_preview");
       const betaFeedbackSetting = await storage.getSystemSetting("feature_beta_feedback");
-      const kioskWalkinFlag = await storage.getFeatureFlagByKey("kiosk_walkin_registration");
-      const groupCheckinFlag = await storage.getFeatureFlagByKey("group_checkin");
+
+      // Per-account feature flags — read from account_feature_configs when customer context exists
+      const customerId = getEffectiveCustomerId(req);
+      let kioskWalkinEnabled = false;
+      let groupCheckinEnabled = false;
+      let eventSyncEnabled = true; // Default ON
+
+      if (customerId) {
+        const { getAccountFeatureConfigs } = await import("./services/license-provisioning");
+        const configs = await getAccountFeatureConfigs(customerId);
+        const configMap = new Map(configs.map(c => [c.featureKey, c.enabled]));
+        kioskWalkinEnabled = configMap.get("walkin_registration") ?? false;
+        groupCheckinEnabled = configMap.get("group_checkin") ?? false;
+        eventSyncEnabled = configMap.get("event_sync") ?? true;
+      } else {
+        // No customer context (e.g., super admin root level) — fall back to platform flags
+        const kioskWalkinFlag = await storage.getFeatureFlagByKey("kiosk_walkin_registration");
+        const groupCheckinFlag = await storage.getFeatureFlagByKey("group_checkin");
+        kioskWalkinEnabled = kioskWalkinFlag?.enabled ?? false;
+        groupCheckinEnabled = groupCheckinFlag?.enabled ?? false;
+      }
+
       res.json({
         badgeFlipPreview: badgeFlipSetting?.value === "true",
         betaFeedback: betaFeedbackSetting?.value === "true",
         penTestMode: process.env.PEN_TEST_MODE === "true",
-        kioskWalkinRegistration: kioskWalkinFlag?.enabled ?? false,
-        groupCheckin: groupCheckinFlag?.enabled ?? false,
+        kioskWalkinRegistration: kioskWalkinEnabled,
+        groupCheckin: groupCheckinEnabled,
+        eventSync: eventSyncEnabled,
       });
     } catch (error) {
       logger.error({ err: error }, "Error fetching feature flags");
@@ -10911,7 +5709,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             eventDate: event.eventDate,
             totalAttendees: attendees.length,
             billableAttendees: billable.length,
-            statusesConfigured: !!(event.syncSettings as any)?.statusesConfigured,
+            statusesConfigured: !!(event.syncSettings)?.statusesConfigured,
           });
         }
       }
@@ -10995,7 +5793,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return {
           key: def.key,
           name: def.name,
+          description: def.description || null,
           category: def.category,
+          basic: def.basic,
+          premium: def.premium,
           enabled: config?.enabled ?? false,
           metadata: config?.metadata || def.metadata || null,
         };

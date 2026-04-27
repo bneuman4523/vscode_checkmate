@@ -157,8 +157,8 @@ TWILIO_FROM_NUMBER=+15551234567
 # PrintNode (optional)
 PRINTNODE_API_KEY=your-printnode-key
 
-# Gemini AI (optional, for badge AI assistant)
-GEMINI_API_KEY=your-gemini-key
+# Claude AI (optional, for setup assistant, badge AI, feedback analysis)
+ANTHROPIC_API_KEY=your-anthropic-key
 ```
 
 ### Database Setup

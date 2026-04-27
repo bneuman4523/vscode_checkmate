@@ -15,7 +15,7 @@ const ALLOWED_CONTENT_TYPES = [
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 function uploadRequireAuth(req: Request, res: Response, next: NextFunction) {
-  const dbUser = (req as any).dbUser;
+  const dbUser = req.dbUser;
   if (!dbUser) {
     return res.status(401).json({ error: "Authentication required" });
   }
