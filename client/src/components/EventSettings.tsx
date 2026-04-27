@@ -253,8 +253,8 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       });
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
       setSyncOverridesInitialized(false);
       toast({
         title: "Sync overrides updated",
@@ -277,9 +277,10 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
       });
       return response.json();
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "discovered-statuses"] });
-      setStatusesInitialized(false); // Allow re-init from fresh data
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "discovered-statuses"] });
+      setStatusesInitialized(false);
       toast({
         title: "Statuses updated",
         description: "Attendee status selection has been saved.",
