@@ -340,6 +340,7 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10"></TableHead>
                   <TableHead>Session</TableHead>
                   <TableHead>Time</TableHead>
                   <TableHead>Location</TableHead>
@@ -347,12 +348,52 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
                   <TableHead>Registrations</TableHead>
                   <TableHead>Check-ins</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredSessions.map((session) => (
                   <TableRow key={session.id} data-testid={`row-session-${session.id}`}>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" data-testid={`button-session-menu-${session.id}`}>
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          <DropdownMenuItem
+                            onClick={() => setEditingSession(session)}
+                            data-testid={`menu-edit-session-${session.id}`}
+                          >
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit Session
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setManagingSession(session)}
+                            data-testid={`menu-manage-checkins-${session.id}`}
+                          >
+                            <UserCheck className="h-4 w-4 mr-2" />
+                            Manage Check-ins
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => setManagingSession(session)}
+                            data-testid={`menu-manage-registrations-${session.id}`}
+                          >
+                            <ListOrdered className="h-4 w-4 mr-2" />
+                            Manage Registrations
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={() => setDeleteConfirmSession(session)}
+                            className="text-destructive"
+                            data-testid={`menu-delete-session-${session.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete Session
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
                     <TableCell>
                       <div className="space-y-1">
                         <div className="font-medium">{session.name}</div>
@@ -433,47 +474,6 @@ export default function EventSessions({ eventId, customerId }: EventSessionsProp
                           </Badge>
                         )}
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" data-testid={`button-session-menu-${session.id}`}>
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() => setManagingSession(session)}
-                            data-testid={`menu-manage-checkins-${session.id}`}
-                          >
-                            <UserCheck className="h-4 w-4 mr-2" />
-                            Manage Check-ins
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setManagingSession(session)}
-                            data-testid={`menu-manage-registrations-${session.id}`}
-                          >
-                            <ListOrdered className="h-4 w-4 mr-2" />
-                            Manage Registrations
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => setEditingSession(session)}
-                            data-testid={`menu-edit-session-${session.id}`}
-                          >
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Session
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setDeleteConfirmSession(session)}
-                            className="text-destructive"
-                            data-testid={`menu-delete-session-${session.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete Session
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))}
