@@ -5293,7 +5293,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isCheckedIn) {
         return res.status(409).json({ error: "Attendee is already checked in", alreadyCheckedIn: true });
       }
-      
+
+      // Check capacity (staff can override)
+      const forceOverride = req.body.overrideCapacity === true;
+      if (session.capacity && !forceOverride) {
+        const checkins = await storage.getSessionCheckins(sessionId);
+        const checkinIds = new Set(checkins.filter(c => c.action === 'checkin').map(c => c.attendeeId));
+        const checkoutIds = new Set(checkins.filter(c => c.action === 'checkout').map(c => c.attendeeId));
+        const activeCount = [...checkinIds].filter(id => !checkoutIds.has(id)).length;
+        if (activeCount >= session.capacity) {
+          return res.status(409).json({
+            error: `Session is at capacity (${activeCount}/${session.capacity})`,
+            atCapacity: true,
+            currentCount: activeCount,
+            capacity: session.capacity,
+          });
+        }
+      }
+
       // Create check-in record
       const checkin = await storage.createSessionCheckin({
         sessionId,

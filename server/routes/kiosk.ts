@@ -798,6 +798,21 @@ export function registerKioskRoutes(app: Express): void {
       if (isCheckedIn) {
         return res.status(409).json({ error: "Attendee is already checked in", alreadyCheckedIn: true });
       }
+
+      // Hard capacity enforcement for kiosk (no override)
+      if (session.capacity) {
+        const checkins = await storage.getSessionCheckins(req.params.sessionId);
+        const checkinIds = new Set(checkins.filter(c => c.action === 'checkin').map(c => c.attendeeId));
+        const checkoutIds = new Set(checkins.filter(c => c.action === 'checkout').map(c => c.attendeeId));
+        const activeCount = [...checkinIds].filter(id => !checkoutIds.has(id)).length;
+        if (activeCount >= session.capacity) {
+          return res.status(409).json({
+            error: `This session is full (${activeCount}/${session.capacity})`,
+            atCapacity: true,
+          });
+        }
+      }
+
       const checkin = await storage.createSessionCheckin({
         sessionId: req.params.sessionId,
         attendeeId,

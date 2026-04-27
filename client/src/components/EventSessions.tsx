@@ -798,6 +798,8 @@ function SessionManagementSheet({
 }: SessionManagementSheetProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"checkins" | "registrations">("checkins");
+  const [capacityOverrideAttendeeId, setCapacityOverrideAttendeeId] = useState<string | null>(null);
+  const [capacityInfo, setCapacityInfo] = useState<{ currentCount: number; capacity: number } | null>(null);
   const { toast } = useToast();
 
   const { data: registrations = [], isLoading: registrationsLoading } = useQuery<Registration[]>({
@@ -816,20 +818,36 @@ function SessionManagementSheet({
   });
 
   const checkInMutation = useMutation({
-    mutationFn: async (attendeeId: string) => {
-      const response = await apiRequest("POST", `/api/sessions/${session?.id}/checkin`, {
-        attendeeId,
-        source: "staff",
+    mutationFn: async ({ attendeeId, overrideCapacity }: { attendeeId: string; overrideCapacity?: boolean }) => {
+      const response = await fetch(`/api/sessions/${session?.id}/checkin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ attendeeId, source: "staff", overrideCapacity }),
       });
-      return response.json();
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.atCapacity) {
+          throw Object.assign(new Error(data.error), { atCapacity: true, currentCount: data.currentCount, capacity: data.capacity });
+        }
+        throw new Error(data.error || "Check-in failed");
+      }
+      return data;
     },
     onSuccess: () => {
+      setCapacityOverrideAttendeeId(null);
+      setCapacityInfo(null);
       queryClient.invalidateQueries({ queryKey: [`/api/sessions/${session?.id}/checkins`] });
       queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/sessions`] });
       queryClient.invalidateQueries({ queryKey: [`/api/events/${eventId}/sessions/checkins/all`] });
       toast({ title: "Checked in", description: "Attendee has been checked in to this session." });
     },
-    onError: (error: Error) => {
+    onError: (error: any, variables) => {
+      if (error.atCapacity) {
+        setCapacityOverrideAttendeeId(variables.attendeeId);
+        setCapacityInfo({ currentCount: error.currentCount, capacity: error.capacity });
+        return;
+      }
       toast({ title: "Check-in failed", description: error.message, variant: "destructive" });
     },
   });
@@ -1000,7 +1018,7 @@ function SessionManagementSheet({
                         ) : (
                           <Button
                             size="sm"
-                            onClick={() => checkInMutation.mutate(attendee.id)}
+                            onClick={() => checkInMutation.mutate({ attendeeId: attendee.id })}
                             disabled={checkInMutation.isPending}
                             data-testid={`button-checkin-${attendee.id}`}
                           >
@@ -1070,6 +1088,33 @@ function SessionManagementSheet({
           )}
         </div>
       </SheetContent>
+
+      <Dialog open={!!capacityOverrideAttendeeId} onOpenChange={(open) => { if (!open) { setCapacityOverrideAttendeeId(null); setCapacityInfo(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Session at Capacity</DialogTitle>
+            <DialogDescription>
+              This session is currently at capacity ({capacityInfo?.currentCount}/{capacityInfo?.capacity}).
+              Do you want to override and check in this attendee anyway?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCapacityOverrideAttendeeId(null); setCapacityInfo(null); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (capacityOverrideAttendeeId) {
+                  checkInMutation.mutate({ attendeeId: capacityOverrideAttendeeId, overrideCapacity: true });
+                }
+              }}
+              disabled={checkInMutation.isPending}
+            >
+              {checkInMutation.isPending ? "Checking in..." : "Override & Check In"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }
