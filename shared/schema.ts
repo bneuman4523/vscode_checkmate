@@ -2179,6 +2179,7 @@ export const inboundApiKeys = pgTable("inbound_api_keys", {
   maskedKey: text("masked_key").notNull(), // e.g., "grt_...abc123"
   isActive: boolean("is_active").notNull().default(true),
   rateLimitPerMinute: integer("rate_limit_per_minute").notNull().default(60),
+  allowedIps: jsonb("allowed_ips").$type<string[]>(), // Optional IP allowlist (null = any IP)
   lastUsedAt: timestamp("last_used_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   createdBy: text("created_by").references(() => users.id),

@@ -1,5 +1,6 @@
 import { createChildLogger } from '../logger';
 import type { Express, Request, Response, NextFunction } from "express";
+import express from "express";
 import { z } from "zod";
 import { createHash, randomBytes } from "crypto";
 import { storage } from "../storage";
@@ -54,6 +55,15 @@ async function inboundApiAuth(req: InboundRequest, res: Response, next: NextFunc
     return res.status(401).json({ error: "Invalid or revoked API key" });
   }
 
+  // IP allowlist check
+  if (apiKey.allowedIps && apiKey.allowedIps.length > 0) {
+    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '';
+    if (!apiKey.allowedIps.includes(clientIp)) {
+      logger.warn({ clientIp, keyId: apiKey.id }, "Inbound API request from non-allowlisted IP");
+      return res.status(403).json({ error: "IP address not allowed for this API key" });
+    }
+  }
+
   // Check feature flag — is inbound_api enabled for this customer?
   const { getAccountFeatureConfigs } = await import("../services/license-provisioning");
   const configs = await getAccountFeatureConfigs(apiKey.customerId);
@@ -88,6 +98,30 @@ async function resolveEvent(customerId: string, eventCode: string, accountCode?:
     .where(and(...conditions))
     .limit(1);
   return event || null;
+}
+
+// ── Audit Logging ────────────────────────────────────────────────────────
+
+async function logInboundActivity(req: InboundRequest, action: string, details: Record<string, unknown>) {
+  try {
+    await storage.createAuditLog({
+      userId: `api-key:${req.inboundApiKeyId}`,
+      userEmail: "inbound-api",
+      userRole: "api",
+      customerId: req.inboundCustomerId || null,
+      customerName: null,
+      action,
+      resourceType: "inbound_api",
+      resourceId: req.inboundApiKeyId || "unknown",
+      resourceName: null,
+      changedFields: [{ field: "summary", oldValue: null, newValue: JSON.stringify(details) }],
+      metadata: details,
+      ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket?.remoteAddress || null,
+      userAgent: req.headers['user-agent'] || null,
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to log inbound API activity");
+  }
 }
 
 // ── Validation Schemas ───────────────────────────────────────────────────
@@ -157,6 +191,9 @@ const registrationBatchSchema = z.object({
 // ── Route Registration ───────────────────────────────────────────────────
 
 export function registerInboundApiRoutes(app: Express): void {
+  // Body size limit for inbound API (1MB max — prevents OOM from oversized payloads)
+  const inboundBodyLimit = express.json({ limit: '1mb' });
+
   // Rate limiter per API key
   const inboundLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -243,7 +280,7 @@ export function registerInboundApiRoutes(app: Express): void {
   // ── Inbound Data Endpoints (API key auth) ──────────────────────────
 
   // POST /api/v1/inbound/attendees — Batch create/update attendees
-  app.post("/api/v1/inbound/attendees", inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
+  app.post("/api/v1/inbound/attendees", inboundBodyLimit, inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
     try {
       const customerId = req.inboundCustomerId!;
       const parsed = attendeeBatchSchema.parse(req.body);
@@ -319,6 +356,8 @@ export function registerInboundApiRoutes(app: Express): void {
 
       logger.info({ customerId, eventCode: parsed.eventCode, created, updated, errors: errors.length }, "Inbound attendees processed");
 
+      await logInboundActivity(req, "inbound_attendees", { eventCode: parsed.eventCode, created, updated, errorCount: errors.length, total: parsed.attendees.length });
+
       res.json({
         success: true,
         processed: created + updated,
@@ -336,7 +375,7 @@ export function registerInboundApiRoutes(app: Express): void {
   });
 
   // POST /api/v1/inbound/events — Create or update an event
-  app.post("/api/v1/inbound/events", inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
+  app.post("/api/v1/inbound/events", inboundBodyLimit, inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
     try {
       const customerId = req.inboundCustomerId!;
       const parsed = eventUpsertSchema.parse(req.body);
@@ -359,6 +398,7 @@ export function registerInboundApiRoutes(app: Express): void {
 
         const updated = await storage.getEvent(existing.id);
         logger.info({ customerId, eventCode: parsed.eventCode }, "Inbound event updated");
+        await logInboundActivity(req, "inbound_event_update", { eventCode: parsed.eventCode, eventId: existing.id });
         res.json({ success: true, action: "updated", event: updated });
       } else {
         // Create new event
@@ -375,6 +415,7 @@ export function registerInboundApiRoutes(app: Express): void {
           accountCode: parsed.accountCode,
         });
         logger.info({ customerId, eventCode: parsed.eventCode, eventId: newEvent.id }, "Inbound event created");
+        await logInboundActivity(req, "inbound_event_create", { eventCode: parsed.eventCode, eventId: newEvent.id });
         res.status(201).json({ success: true, action: "created", event: newEvent });
       }
     } catch (error: any) {
@@ -387,7 +428,7 @@ export function registerInboundApiRoutes(app: Express): void {
   });
 
   // POST /api/v1/inbound/sessions — Batch create/update sessions
-  app.post("/api/v1/inbound/sessions", inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
+  app.post("/api/v1/inbound/sessions", inboundBodyLimit, inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
     try {
       const customerId = req.inboundCustomerId!;
       const parsed = sessionBatchSchema.parse(req.body);
@@ -437,6 +478,7 @@ export function registerInboundApiRoutes(app: Express): void {
       }
 
       logger.info({ customerId, eventCode: parsed.eventCode, created, updated, errors: errors.length }, "Inbound sessions processed");
+      await logInboundActivity(req, "inbound_sessions", { eventCode: parsed.eventCode, created, updated, errorCount: errors.length, total: parsed.sessions.length });
       res.json({ success: true, processed: created + updated, created, updated, errors });
     } catch (error: any) {
       if (error.name === "ZodError") {
@@ -448,7 +490,7 @@ export function registerInboundApiRoutes(app: Express): void {
   });
 
   // POST /api/v1/inbound/session-registrations — Batch register attendees for sessions
-  app.post("/api/v1/inbound/session-registrations", inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
+  app.post("/api/v1/inbound/session-registrations", inboundBodyLimit, inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
     try {
       const customerId = req.inboundCustomerId!;
       const parsed = registrationBatchSchema.parse(req.body);
@@ -499,6 +541,7 @@ export function registerInboundApiRoutes(app: Express): void {
       }
 
       logger.info({ customerId, eventCode: parsed.eventCode, created, updated, errors: errors.length }, "Inbound session registrations processed");
+      await logInboundActivity(req, "inbound_session_registrations", { eventCode: parsed.eventCode, created, updated, errorCount: errors.length, total: parsed.registrations.length });
       res.json({ success: true, processed: created + updated, created, updated, errors });
     } catch (error: any) {
       if (error.name === "ZodError") {
