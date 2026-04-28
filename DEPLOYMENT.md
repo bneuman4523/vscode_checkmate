@@ -87,6 +87,7 @@ These are Replit-specific and should NOT be set:
 
 - **Engine:** PostgreSQL 16+
 - **Recommended:** AWS RDS or Aurora PostgreSQL
+- **Encryption at rest:** Enable RDS encryption (AES-256, AWS KMS managed keys). This encrypts all data at rest including PII fields (names, emails, custom fields) and satisfies SOC 2, HIPAA, and GDPR requirements.
 - **Schema push:** Run after first deploy: `npx drizzle-kit push` (or include in CI/CD pipeline)
 - **Connection:** Standard `pg` driver (NOT Neon WebSocket) — auto-detected from DATABASE_URL
 
