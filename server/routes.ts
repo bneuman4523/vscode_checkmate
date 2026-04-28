@@ -25,6 +25,7 @@ import { registerTempStaffRoutes } from "./routes/temp-staff";
 import { registerKioskRoutes } from "./routes/kiosk";
 import { registerWorkflowRoutes } from "./routes/workflows";
 import { registerIntegrationConnectionRoutes } from "./routes/integration-connections";
+import { registerInboundApiRoutes } from "./routes/inbound-api";
 import { printNodeService } from "./services/printnode";
 import healthRoutes from "./routes/health";
 import { db } from "./db";
@@ -71,6 +72,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Register temp staff routes (staff auth, check-in, printing, workflows)
   registerTempStaffRoutes(app);
+
+  // Register inbound API routes (external systems push data via API key)
+  registerInboundApiRoutes(app);
 
   // Register kiosk public routes (PIN-protected)
   registerKioskRoutes(app);

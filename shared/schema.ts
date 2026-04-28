@@ -2169,3 +2169,28 @@ export const insertPartnerCustomerAssignmentSchema = createInsertSchema(partnerC
 });
 export type InsertPartnerCustomerAssignment = z.infer<typeof insertPartnerCustomerAssignmentSchema>;
 export type PartnerCustomerAssignment = typeof partnerCustomerAssignments.$inferSelect;
+
+// Inbound API keys (for external systems to push data to Greet)
+export const inboundApiKeys = pgTable("inbound_api_keys", {
+  id: text("id").primaryKey().$defaultFn(() => `iak-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  name: text("name").notNull(), // Admin-friendly label (e.g., "Certain Production")
+  keyHash: text("key_hash").notNull().unique(), // SHA256 hash for fast lookup
+  maskedKey: text("masked_key").notNull(), // e.g., "grt_...abc123"
+  isActive: boolean("is_active").notNull().default(true),
+  rateLimitPerMinute: integer("rate_limit_per_minute").notNull().default(60),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdBy: text("created_by").references(() => users.id),
+}, (table) => ({
+  customerIdx: index("iak_customer_idx").on(table.customerId),
+  keyHashIdx: index("iak_key_hash_idx").on(table.keyHash),
+}));
+
+export const insertInboundApiKeySchema = createInsertSchema(inboundApiKeys).omit({
+  id: true,
+  createdAt: true,
+  lastUsedAt: true,
+});
+export type InsertInboundApiKey = z.infer<typeof insertInboundApiKeySchema>;
+export type InboundApiKey = typeof inboundApiKeys.$inferSelect;

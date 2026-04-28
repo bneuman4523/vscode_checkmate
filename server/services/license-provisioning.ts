@@ -94,6 +94,7 @@ const FEATURE_DEFINITIONS: FeatureDef[] = [
   { key: "per_event_giveaways", name: "Per-Event Giveaways", description: "Configure separate prize pools per event", category: "giveaways", basic: false, premium: "coming_soon" },
 
   { key: "event_sync", name: "Event Sync & Integration", description: "Connect to external platforms to sync events, attendees, and sessions", category: "integrations", basic: true, premium: true },
+  { key: "inbound_api", name: "Inbound API", description: "Allow external systems to push attendee, event, and session data to Greet via API", category: "integrations", basic: false, premium: true },
   { key: "csv_import_export", name: "CSV Import/Export", description: "Import attendees from CSV and export check-in data", category: "integrations", basic: true, premium: true },
   { key: "auto_event_discovery", name: "Auto Event Discovery", description: "Browse and select events from connected platforms", category: "integrations", basic: true, premium: true },
   { key: "two_way_sync", name: "Two-Way Sync", description: "Push check-in status back to the source platform in real-time", category: "integrations", basic: true, premium: true },

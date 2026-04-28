@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Crown, Shield, Users, TrendingUp, AlertTriangle, Check, X, Lock, Save, Calendar } from "lucide-react";
+import { Crown, Shield, Users, TrendingUp, AlertTriangle, Check, X, Lock, Save, Calendar, Key, Copy, Trash2, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -330,6 +330,7 @@ export default function LicenseManagement() {
           <TabsTrigger value="features">Features ({enabledCount}/{totalCount})</TabsTrigger>
           <TabsTrigger value="usage">Usage</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
+          {isSuperAdmin && <TabsTrigger value="api-keys">API Keys</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -916,7 +917,177 @@ export default function LicenseManagement() {
             </Card>
           )}
         </TabsContent>
+
+        {isSuperAdmin && <ApiKeysTab customerId={customerId} />}
       </Tabs>
     </div>
+  );
+}
+
+interface ApiKeyData {
+  id: string;
+  customerId: string;
+  name: string;
+  maskedKey: string;
+  isActive: boolean;
+  rateLimitPerMinute: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  rawKey?: string;
+}
+
+function ApiKeysTab({ customerId }: { customerId: string }) {
+  const [newKeyName, setNewKeyName] = useState("");
+  const [showNewKey, setShowNewKey] = useState<string | null>(null);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: apiKeys = [], isLoading } = useQuery<ApiKeyData[]>({
+    queryKey: [`/api/customers/${customerId}/api-keys`],
+    enabled: !!customerId,
+  });
+
+  const createKeyMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", `/api/customers/${customerId}/api-keys`, { name });
+      return res.json();
+    },
+    onSuccess: (data: ApiKeyData) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/customers/${customerId}/api-keys`] });
+      setShowNewKey(data.rawKey || null);
+      setNewKeyName("");
+      toast({ title: "API key created", description: "Copy the key now — it won't be shown again." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to create API key", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const revokeKeyMutation = useMutation({
+    mutationFn: async (keyId: string) => {
+      await apiRequest("DELETE", `/api/customers/${customerId}/api-keys/${keyId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/customers/${customerId}/api-keys`] });
+      toast({ title: "API key revoked" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Failed to revoke key", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: "Copied to clipboard" });
+  };
+
+  return (
+    <TabsContent value="api-keys" className="space-y-4 mt-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            Inbound API Keys
+          </CardTitle>
+          <CardDescription>
+            Allow external systems to push attendee, event, and session data to Greet.
+            Each key is scoped to this customer account.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {showNewKey && (
+            <div className="rounded-lg border border-green-300 bg-green-50 dark:bg-green-950/20 dark:border-green-800 p-4 space-y-2">
+              <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                New API key created — copy it now. It won't be shown again.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 rounded bg-white dark:bg-black px-3 py-2 font-mono text-sm border select-all">
+                  {showNewKey}
+                </code>
+                <Button size="sm" variant="outline" onClick={() => copyToClipboard(showNewKey)}>
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => setShowNewKey(null)}>
+                Dismiss
+              </Button>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Input
+              placeholder="Key name (e.g., Certain Production)"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && newKeyName.trim() && createKeyMutation.mutate(newKeyName.trim())}
+              className="flex-1"
+            />
+            <Button
+              onClick={() => newKeyName.trim() && createKeyMutation.mutate(newKeyName.trim())}
+              disabled={!newKeyName.trim() || createKeyMutation.isPending}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Generate Key
+            </Button>
+          </div>
+
+          {isLoading ? (
+            <Skeleton className="h-24" />
+          ) : apiKeys.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              No API keys yet. Generate one to allow external systems to push data.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {apiKeys.map((key) => (
+                <div key={key.id} className={`flex items-center justify-between rounded-lg border p-3 ${!key.isActive ? "opacity-50" : ""}`}>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{key.name}</span>
+                      {!key.isActive && (
+                        <Badge variant="destructive" className="text-xs">Revoked</Badge>
+                      )}
+                    </div>
+                    <code className="text-xs text-muted-foreground font-mono">{key.maskedKey}</code>
+                    <div className="text-xs text-muted-foreground">
+                      Created {new Date(key.createdAt).toLocaleDateString()}
+                      {key.lastUsedAt && ` · Last used ${new Date(key.lastUsedAt).toLocaleDateString()}`}
+                      {` · ${key.rateLimitPerMinute} req/min`}
+                    </div>
+                  </div>
+                  {key.isActive && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => revokeKeyMutation.mutate(key.id)}
+                      disabled={revokeKeyMutation.isPending}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">API Reference</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p>All endpoints require <code className="text-xs bg-muted px-1.5 py-0.5 rounded">Authorization: Bearer grt_...</code></p>
+          <div className="space-y-1 font-mono text-xs">
+            <p><span className="text-green-600 font-semibold">POST</span> /api/v1/inbound/attendees</p>
+            <p><span className="text-green-600 font-semibold">POST</span> /api/v1/inbound/events</p>
+            <p><span className="text-green-600 font-semibold">POST</span> /api/v1/inbound/sessions</p>
+            <p><span className="text-green-600 font-semibold">POST</span> /api/v1/inbound/session-registrations</p>
+          </div>
+          <p className="pt-2">Rate limit: {apiKeys[0]?.rateLimitPerMinute || 60} requests/minute per key.</p>
+        </CardContent>
+      </Card>
+    </TabsContent>
   );
 }
