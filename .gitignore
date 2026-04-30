@@ -8,6 +8,10 @@ vite.config.ts.*
 # Environment files
 .env
 .env.*
+!.env.example
+
+# Claude VS Code extension artifacts
+claude-vscode-extension/
 
 # Local file uploads
 uploads/

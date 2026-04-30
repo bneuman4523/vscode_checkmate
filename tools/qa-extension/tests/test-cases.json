@@ -1,0 +1,659 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "source": "docs/STAGING_TEST_PLAN.md",
+    "totalTests": 167,
+    "generated": "2026-04-29"
+  },
+  "config": {
+    "baseUrl": "",
+    "credentials": {
+      "superAdmin": { "phone": "", "email": "" },
+      "admin": { "phone": "", "email": "" },
+      "staff": { "passcode": "" },
+      "partner": { "phone": "", "email": "" }
+    },
+    "testData": {
+      "customerId": "",
+      "eventId": "",
+      "attendeeName": "",
+      "kioskPin": ""
+    }
+  },
+  "sections": [
+    {
+      "id": "1",
+      "name": "Authentication & Session Management",
+      "tests": [
+        {
+          "id": "1.1",
+          "name": "Email/password login",
+          "tags": ["critical", "auth", "smoke"],
+          "mode": "assisted",
+          "steps": "Enter valid credentials at /login",
+          "expected": "Dashboard loads",
+          "auto": {
+            "actions": [
+              { "type": "navigate", "url": "{{baseUrl}}/login" },
+              { "type": "wait", "value": 1000 },
+              { "type": "click", "selector": "contains:Use email instead" },
+              { "type": "wait", "value": 500 },
+              { "type": "type", "selector": "id:email", "value": "{{superAdmin.email}}" },
+              { "type": "click", "selector": "contains:Send Login Code" }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "id:emailCode" }
+            ],
+            "note": "OTP code must be entered manually — check email/SMS"
+          }
+        },
+        {
+          "id": "1.2",
+          "name": "OTP login (SMS)",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Enter phone, receive code, verify",
+          "expected": "Dashboard loads"
+        },
+        {
+          "id": "1.3",
+          "name": "OTP login (email)",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Enter email, receive code, verify",
+          "expected": "Dashboard loads"
+        },
+        {
+          "id": "1.4",
+          "name": "Wrong password",
+          "tags": ["auth", "negative"],
+          "mode": "manual",
+          "steps": "Enter wrong password",
+          "expected": "Error message, no lockout on first attempt"
+        },
+        {
+          "id": "1.5",
+          "name": "Wrong OTP",
+          "tags": ["auth", "negative"],
+          "mode": "manual",
+          "steps": "Enter wrong code 5 times",
+          "expected": "Locked out for 15 minutes"
+        },
+        {
+          "id": "1.6",
+          "name": "Forgot password",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Click forgot password, enter email",
+          "expected": "Reset email sent"
+        },
+        {
+          "id": "1.7",
+          "name": "Password reset",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Follow reset link, set new password",
+          "expected": "Can log in with new password"
+        },
+        {
+          "id": "1.8",
+          "name": "Set password from invite",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Follow invite SMS link",
+          "expected": "Password set page loads"
+        },
+        {
+          "id": "1.9",
+          "name": "Session persistence",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Login, close tab, reopen app",
+          "expected": "Still logged in"
+        },
+        {
+          "id": "1.10",
+          "name": "Session timeout",
+          "tags": ["auth"],
+          "mode": "manual",
+          "steps": "Leave idle 4+ hours",
+          "expected": "Warning dialog, then forced logout"
+        },
+        {
+          "id": "1.11",
+          "name": "Logout",
+          "tags": ["auth", "smoke"],
+          "mode": "assisted",
+          "steps": "Click user menu, then Sign Out",
+          "expected": "Redirected to login, session cleared",
+          "auto": {
+            "actions": [
+              { "type": "click", "selector": "testid:button-user-menu" },
+              { "type": "wait", "value": 500 },
+              { "type": "click", "selector": "testid:button-logout" },
+              { "type": "wait", "value": 2000 }
+            ],
+            "assertions": [
+              { "type": "url_contains", "value": "/login" }
+            ],
+            "note": "This logs you out — run last or re-login after"
+          }
+        },
+        {
+          "id": "1.12",
+          "name": "Auth fail-closed",
+          "tags": ["auth", "security"],
+          "mode": "manual",
+          "steps": "(Dev) Simulate DB error during auth",
+          "expected": "Returns 500, blocks request"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "name": "Role-Based Access Control",
+      "tests": [
+        {
+          "id": "2.1",
+          "name": "Super admin sees all accounts",
+          "tags": ["rbac", "smoke"],
+          "mode": "assisted",
+          "steps": "Login as super admin, navigate to Accounts",
+          "expected": "Accounts page shows all customers with Add Customer button",
+          "auto": {
+            "actions": [
+              { "type": "navigate", "url": "{{baseUrl}}/customers" },
+              { "type": "waitForElement", "selector": "contains:Accounts", "timeout": 5000 }
+            ],
+            "assertions": [
+              { "type": "url_contains", "value": "/customers" },
+              { "type": "element_visible", "selector": "contains:Accounts" },
+              { "type": "element_visible", "selector": "testid:button-add-customer" }
+            ]
+          }
+        },
+        { "id": "2.2", "name": "Admin scoped to account", "tags": ["rbac"], "mode": "manual", "steps": "Login as admin", "expected": "Only sees own account, no Accounts page" },
+        { "id": "2.3", "name": "Manager access", "tags": ["rbac"], "mode": "manual", "steps": "Login as manager", "expected": "Can manage events, no user management" },
+        { "id": "2.4", "name": "Staff access", "tags": ["rbac"], "mode": "manual", "steps": "Login as staff", "expected": "Limited to scanner, badges, check-in" },
+        {
+          "id": "2.5",
+          "name": "Partner sees assigned accounts",
+          "tags": ["rbac", "smoke"],
+          "mode": "manual",
+          "steps": "Login as partner",
+          "expected": "Only assigned accounts visible"
+        },
+        { "id": "2.6", "name": "Partner cannot create accounts", "tags": ["rbac"], "mode": "manual", "steps": "Check accounts page as partner", "expected": "No 'Add Customer' button" },
+        { "id": "2.7", "name": "Partner admin within account", "tags": ["rbac"], "mode": "manual", "steps": "Navigate into assigned account", "expected": "Administration section visible" },
+        { "id": "2.8", "name": "Partner blocked from unassigned", "tags": ["rbac", "security"], "mode": "manual", "steps": "Access unassigned account URL directly", "expected": "403 error" },
+        { "id": "2.9", "name": "Super admin impersonation", "tags": ["rbac"], "mode": "manual", "steps": "Select a customer from accounts", "expected": "Data scoped to that customer" },
+        { "id": "2.10", "name": "Cross-tenant isolation", "tags": ["rbac", "security"], "mode": "manual", "steps": "Admin A tries to access Admin B URL", "expected": "403 error" }
+      ]
+    },
+    {
+      "id": "3",
+      "name": "Customer Account Management",
+      "tests": [
+        { "id": "3.1", "name": "Create customer", "tags": ["accounts"], "mode": "manual", "steps": "Super admin creates new account", "expected": "Account appears in list" },
+        { "id": "3.2", "name": "Edit customer", "tags": ["accounts"], "mode": "manual", "steps": "Rename account, change contact email", "expected": "Changes persist" },
+        { "id": "3.3", "name": "Deactivate account", "tags": ["accounts"], "mode": "manual", "steps": "Deactivate a customer", "expected": "Account greyed out, users can't login" },
+        { "id": "3.4", "name": "Reactivate account", "tags": ["accounts"], "mode": "manual", "steps": "Reactivate deactivated customer", "expected": "Account active again" },
+        { "id": "3.5", "name": "Delete account", "tags": ["accounts"], "mode": "manual", "steps": "Delete a customer (confirm dialog)", "expected": "Account and all data removed" },
+        { "id": "3.6", "name": "License assignment", "tags": ["accounts"], "mode": "manual", "steps": "Set customer to Premium plan", "expected": "Features update to premium tier" }
+      ]
+    },
+    {
+      "id": "4",
+      "name": "User Management",
+      "tests": [
+        { "id": "4.1", "name": "Create user", "tags": ["users"], "mode": "manual", "steps": "Add new user with phone number", "expected": "User created, appears in list" },
+        { "id": "4.2", "name": "Send welcome SMS", "tags": ["users"], "mode": "manual", "steps": "Toggle 'Send Welcome SMS' on create", "expected": "SMS sent with login instructions" },
+        { "id": "4.3", "name": "Edit user profile", "tags": ["users"], "mode": "manual", "steps": "Change name, phone, email", "expected": "Changes persist" },
+        { "id": "4.4", "name": "Self-edit profile", "tags": ["users"], "mode": "manual", "steps": "Edit own name and phone", "expected": "Saves; role/customer locked" },
+        { "id": "4.5", "name": "Change user role", "tags": ["users"], "mode": "manual", "steps": "Super admin changes user from staff to admin", "expected": "Role updates, permissions change" },
+        { "id": "4.6", "name": "Deactivate user", "tags": ["users"], "mode": "manual", "steps": "Toggle user inactive", "expected": "User can't login" },
+        { "id": "4.7", "name": "Set password for user", "tags": ["users"], "mode": "manual", "steps": "Admin sets password for another user", "expected": "User can login with new password" },
+        { "id": "4.8", "name": "Create partner user", "tags": ["users"], "mode": "manual", "steps": "Create user with Partner role", "expected": "No customer assigned, account picker shown" },
+        { "id": "4.9", "name": "Assign partner accounts", "tags": ["users"], "mode": "manual", "steps": "Select accounts in checkbox list", "expected": "Assignments saved, partner sees them" },
+        { "id": "4.10", "name": "Role display", "tags": ["users"], "mode": "manual", "steps": "Check user list", "expected": "Correct role badges" }
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Event Management",
+      "tests": [
+        { "id": "5.1", "name": "Create event", "tags": ["events"], "mode": "manual", "steps": "Click Add Event, fill name + date", "expected": "Event created" },
+        { "id": "5.2", "name": "Edit event", "tags": ["events"], "mode": "manual", "steps": "Change event name and date", "expected": "Changes persist" },
+        { "id": "5.3", "name": "Delete event", "tags": ["events"], "mode": "manual", "steps": "Delete event with confirmation", "expected": "Event removed" },
+        {
+          "id": "5.4",
+          "name": "Duplicate event",
+          "tags": ["events", "smoke"],
+          "mode": "manual",
+          "steps": "Click Duplicate Event from dropdown",
+          "expected": "Copy created with all config, no attendees"
+        },
+        { "id": "5.5", "name": "Verify duplication", "tags": ["events"], "mode": "manual", "steps": "Open duplicated event", "expected": "Workflow, badges, staff, notifications copied" },
+        { "id": "5.6", "name": "Setup checklist", "tags": ["events"], "mode": "manual", "steps": "Open event overview", "expected": "Checklist shows with correct completion status" },
+        { "id": "5.7", "name": "Checklist deep links", "tags": ["events"], "mode": "manual", "steps": "Click each checklist item", "expected": "Navigates to correct configuration page" },
+        { "id": "5.8", "name": "Checklist edit buttons", "tags": ["events"], "mode": "manual", "steps": "Click 'Edit' on configured items", "expected": "Navigates to settings page" },
+        { "id": "5.9", "name": "Event status tracking", "tags": ["events"], "mode": "manual", "steps": "Check event card", "expected": "Status badge shows" },
+        { "id": "5.10", "name": "Pin to favorites", "tags": ["events"], "mode": "manual", "steps": "Pin event from dropdown", "expected": "Appears in sidebar favorites" },
+        { "id": "5.11", "name": "Unpin from favorites", "tags": ["events"], "mode": "manual", "steps": "Right-click pinned event", "expected": "Removed from favorites" }
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Attendee Management",
+      "tests": [
+        { "id": "6.1", "name": "View attendee list", "tags": ["attendees"], "mode": "manual", "steps": "Open event -> Attendees", "expected": "List loads with search" },
+        { "id": "6.2", "name": "Search attendees", "tags": ["attendees"], "mode": "manual", "steps": "Type in search box", "expected": "Results filter in real-time" },
+        { "id": "6.3", "name": "CSV import", "tags": ["attendees"], "mode": "manual", "steps": "Upload CSV file", "expected": "Attendees imported, count updates" },
+        { "id": "6.4", "name": "Edit attendee", "tags": ["attendees"], "mode": "manual", "steps": "Click edit on an attendee", "expected": "Form opens, changes save" },
+        { "id": "6.5", "name": "Manual check-in", "tags": ["attendees", "checkin"], "mode": "manual", "steps": "Click check-in button", "expected": "Status changes, timestamp set" },
+        { "id": "6.6", "name": "Revert check-in", "tags": ["attendees", "checkin"], "mode": "manual", "steps": "Click revert on checked-in attendee", "expected": "Status reverts, workflow data cleared" },
+        { "id": "6.7", "name": "View custom fields", "tags": ["attendees"], "mode": "manual", "steps": "Open attendee with custom data", "expected": "Custom fields display correctly" },
+        { "id": "6.8", "name": "Registration status filter", "tags": ["attendees"], "mode": "manual", "steps": "Toggle status filters", "expected": "List filters by status" },
+        { "id": "6.9", "name": "Export CSV", "tags": ["attendees", "export"], "mode": "manual", "steps": "Click export", "expected": "CSV downloads with correct data" },
+        { "id": "6.10", "name": "Export Excel", "tags": ["attendees", "export"], "mode": "manual", "steps": "Click Excel export", "expected": "XLSX downloads with formatting" }
+      ]
+    },
+    {
+      "id": "7",
+      "name": "Check-In Operations",
+      "tests": [
+        {
+          "id": "7.1",
+          "name": "QR scan check-in",
+          "tags": ["checkin", "smoke"],
+          "mode": "manual",
+          "steps": "Scan valid QR code",
+          "expected": "Attendee checked in"
+        },
+        { "id": "7.2", "name": "Manual search check-in", "tags": ["checkin"], "mode": "manual", "steps": "Search by name, select, check in", "expected": "Success" },
+        { "id": "7.3", "name": "Already checked in", "tags": ["checkin"], "mode": "manual", "steps": "Scan same attendee again", "expected": "'Already checked in' warning" },
+        { "id": "7.4", "name": "Workflow check-in", "tags": ["checkin", "workflow"], "mode": "manual", "steps": "Check in with workflow enabled", "expected": "Steps shown before completion" },
+        { "id": "7.5", "name": "Workflow questions", "tags": ["checkin", "workflow"], "mode": "manual", "steps": "Answer buyer questions step", "expected": "Responses saved" },
+        { "id": "7.6", "name": "Workflow disclaimer", "tags": ["checkin", "workflow"], "mode": "manual", "steps": "Accept disclaimer with signature", "expected": "Signature captured" },
+        { "id": "7.7", "name": "Workflow badge print", "tags": ["checkin", "workflow"], "mode": "manual", "steps": "Complete badge print step", "expected": "Badge prints" },
+        { "id": "7.8", "name": "Group check-in", "tags": ["checkin", "group"], "mode": "manual", "steps": "Scan order code", "expected": "Group card, batch check-in" },
+        { "id": "7.9", "name": "Group individual check-in", "tags": ["checkin", "group"], "mode": "manual", "steps": "Select 'Just me' from group", "expected": "Single member checked in" },
+        { "id": "7.10", "name": "Walk-in registration", "tags": ["checkin", "walkin"], "mode": "manual", "steps": "Create walk-in from staff dashboard", "expected": "New attendee created and checked in" }
+      ]
+    },
+    {
+      "id": "8",
+      "name": "Session Management",
+      "tests": [
+        { "id": "8.1", "name": "Create session", "tags": ["sessions"], "mode": "manual", "steps": "Add session with name, time, capacity", "expected": "Session created" },
+        { "id": "8.2", "name": "Edit session", "tags": ["sessions"], "mode": "manual", "steps": "Change session details", "expected": "Changes persist" },
+        { "id": "8.3", "name": "Session check-in", "tags": ["sessions", "checkin"], "mode": "manual", "steps": "Check attendee into session", "expected": "Timestamp recorded" },
+        { "id": "8.4", "name": "Session check-out", "tags": ["sessions"], "mode": "manual", "steps": "Check attendee out of session", "expected": "Duration calculated" },
+        { "id": "8.5", "name": "Capacity enforcement", "tags": ["sessions", "smoke"], "mode": "manual", "steps": "Fill session to capacity", "expected": "New registrations waitlisted" },
+        { "id": "8.6", "name": "Waitlist promotion", "tags": ["sessions"], "mode": "manual", "steps": "Cancel a registration", "expected": "Next waitlisted attendee promoted" },
+        { "id": "8.7", "name": "Session kiosk", "tags": ["sessions", "kiosk"], "mode": "manual", "steps": "Launch session kiosk", "expected": "Session check-in flow works" }
+      ]
+    },
+    {
+      "id": "9",
+      "name": "Kiosk Mode",
+      "tests": [
+        {
+          "id": "9.1",
+          "name": "Launch kiosk",
+          "tags": ["kiosk", "smoke"],
+          "mode": "assisted",
+          "steps": "Navigate to /kiosk/:customerId/:eventId, select Event Kiosk",
+          "expected": "Welcome screen with Start Check-In button",
+          "auto": {
+            "actions": [
+              { "type": "navigate", "url": "{{baseUrl}}/kiosk/{{customerId}}/{{eventId}}" },
+              { "type": "waitForElement", "selector": "testid:card-event-kiosk", "timeout": 5000 },
+              { "type": "click", "selector": "testid:card-event-kiosk" },
+              { "type": "waitForElement", "selector": "testid:button-kiosk-start", "timeout": 5000 }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "testid:button-kiosk-start" }
+            ]
+          }
+        },
+        {
+          "id": "9.2",
+          "name": "Kiosk scanning screen",
+          "tags": ["kiosk", "smoke"],
+          "mode": "assisted",
+          "steps": "Click Start Check-In, verify scan/manual tabs",
+          "expected": "QR and manual search tabs visible",
+          "auto": {
+            "actions": [
+              { "type": "click", "selector": "testid:button-kiosk-start" },
+              { "type": "waitForElement", "selector": "testid:tab-kiosk-qr", "timeout": 5000 }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "testid:tab-kiosk-qr" },
+              { "type": "element_visible", "selector": "testid:tab-kiosk-manual" }
+            ],
+            "note": "QR scan requires camera — use manual tab for automated testing"
+          }
+        },
+        {
+          "id": "9.3",
+          "name": "Manual search in kiosk",
+          "tags": ["kiosk"],
+          "mode": "assisted",
+          "steps": "Switch to Type Info tab, enter attendee name, search",
+          "expected": "Search results appear",
+          "auto": {
+            "actions": [
+              { "type": "click", "selector": "testid:tab-kiosk-manual" },
+              { "type": "waitForElement", "selector": "id:kiosk-manual-search", "timeout": 3000 },
+              { "type": "type", "selector": "id:kiosk-manual-search", "value": "{{attendeeName}}" },
+              { "type": "click", "selector": "testid:button-kiosk-search" },
+              { "type": "wait", "value": 2000 }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "contains:{{attendeeName}}" }
+            ],
+            "note": "Requires at least one attendee matching the configured name"
+          }
+        },
+        { "id": "9.4", "name": "Multiple matches", "tags": ["kiosk"], "mode": "manual", "steps": "Search ambiguous name", "expected": "Results step shows" },
+        { "id": "9.5", "name": "Email verification", "tags": ["kiosk"], "mode": "manual", "steps": "Trigger multi-match", "expected": "Verify step with email input" },
+        { "id": "9.6", "name": "Walk-in registration", "tags": ["kiosk", "walkin"], "mode": "manual", "steps": "Click 'Not registered?'", "expected": "Form appears, registration works" },
+        { "id": "9.7", "name": "Group check-in in kiosk", "tags": ["kiosk", "group"], "mode": "manual", "steps": "Scan order code", "expected": "Group card appears" },
+        {
+          "id": "9.8",
+          "name": "Workflow in kiosk",
+          "tags": ["kiosk", "workflow", "smoke"],
+          "mode": "manual",
+          "steps": "Check in with workflow",
+          "expected": "Steps shown before success"
+        },
+        { "id": "9.9", "name": "Print badge in kiosk", "tags": ["kiosk", "print"], "mode": "manual", "steps": "Click 'Print My Badge'", "expected": "Print job sent" },
+        {
+          "id": "9.10",
+          "name": "Skip print in kiosk",
+          "tags": ["kiosk"],
+          "mode": "assisted",
+          "steps": "Click 'Skip'",
+          "expected": "Returns to welcome",
+          "auto": {
+            "actions": [],
+            "assertions": [
+              { "type": "element_visible", "selector": "testid:button-kiosk-skip" }
+            ],
+            "note": "Requires being on the success screen first"
+          }
+        },
+        {
+          "id": "9.11",
+          "name": "Exit PIN dialog",
+          "tags": ["kiosk", "smoke"],
+          "mode": "assisted",
+          "steps": "Press Escape key to trigger exit dialog",
+          "expected": "PIN input dialog appears",
+          "auto": {
+            "actions": [
+              { "type": "keypress", "key": "Escape" },
+              { "type": "waitForElement", "selector": "id:kiosk-exit-pin", "timeout": 3000 }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "id:kiosk-exit-pin" },
+              { "type": "element_visible", "selector": "testid:button-confirm-exit" }
+            ]
+          }
+        },
+        {
+          "id": "9.12",
+          "name": "Correct PIN exit",
+          "tags": ["kiosk"],
+          "mode": "assisted",
+          "steps": "Enter correct PIN",
+          "expected": "Kiosk exits",
+          "auto": {
+            "actions": [
+              { "type": "type", "selector": "id:kiosk-exit-pin", "value": "{{kioskPin}}" },
+              { "type": "click", "selector": "testid:button-confirm-exit" },
+              { "type": "wait", "value": 1000 }
+            ],
+            "assertions": [
+              { "type": "element_not_exists", "selector": "testid:button-kiosk-start" }
+            ]
+          }
+        },
+        { "id": "9.13", "name": "Wrong PIN", "tags": ["kiosk", "negative"], "mode": "manual", "steps": "Enter wrong PIN", "expected": "Error, stays in kiosk" },
+        { "id": "9.14", "name": "PIN rate limiting", "tags": ["kiosk", "security"], "mode": "manual", "steps": "Wrong PIN 6 times", "expected": "Locked out" },
+        {
+          "id": "9.15",
+          "name": "Offline indicators",
+          "tags": ["kiosk"],
+          "mode": "assisted",
+          "steps": "Disconnect network",
+          "expected": "Offline badge appears",
+          "auto": {
+            "actions": [],
+            "assertions": [
+              { "type": "element_visible", "selector": "testid:badge-offline" }
+            ],
+            "note": "Requires manually disconnecting network"
+          }
+        },
+        { "id": "9.16", "name": "Error recovery", "tags": ["kiosk"], "mode": "manual", "steps": "Force event error", "expected": "Error step with retry" },
+        { "id": "9.17", "name": "Accessibility: labels", "tags": ["kiosk", "a11y"], "mode": "manual", "steps": "Inspect form inputs", "expected": "All have associated labels" },
+        { "id": "9.18", "name": "Accessibility: errors", "tags": ["kiosk", "a11y"], "mode": "manual", "steps": "Trigger error state", "expected": "role='alert' on error messages" },
+        { "id": "9.19", "name": "Accessibility: success", "tags": ["kiosk", "a11y"], "mode": "manual", "steps": "Complete check-in", "expected": "role='status' on success message" }
+      ]
+    },
+    {
+      "id": "10",
+      "name": "Badge Design & Printing",
+      "tests": [
+        {
+          "id": "10.1",
+          "name": "Badge designer",
+          "tags": ["badge"],
+          "mode": "manual",
+          "steps": "Open badge editor",
+          "expected": "Canvas renders with merge fields"
+        },
+        { "id": "10.2", "name": "Drag merge fields", "tags": ["badge"], "mode": "manual", "steps": "Move fields on canvas", "expected": "Positions save" },
+        { "id": "10.3", "name": "Change font/color", "tags": ["badge"], "mode": "manual", "steps": "Edit template styling", "expected": "Preview updates" },
+        {
+          "id": "10.4",
+          "name": "Template preview",
+          "tags": ["badge", "smoke"],
+          "mode": "manual",
+          "steps": "Preview badge with attendee data",
+          "expected": "Correct merge field values"
+        },
+        { "id": "10.5", "name": "Foldable badge", "tags": ["badge"], "mode": "manual", "steps": "Select foldable layout", "expected": "Front and back panels render" },
+        { "id": "10.6", "name": "QR code config", "tags": ["badge"], "mode": "manual", "steps": "Change QR embed type", "expected": "QR renders with correct data" },
+        { "id": "10.7", "name": "Per-type template mapping", "tags": ["badge"], "mode": "manual", "steps": "Assign templates per attendee type", "expected": "Correct template resolves" },
+        { "id": "10.8", "name": "PrintNode print", "tags": ["badge", "print"], "mode": "manual", "steps": "Print via cloud printer", "expected": "Job sent, success toast" },
+        { "id": "10.9", "name": "Browser print", "tags": ["badge", "print"], "mode": "manual", "steps": "Print without PrintNode", "expected": "Browser dialog opens" },
+        { "id": "10.10", "name": "PDF download", "tags": ["badge"], "mode": "manual", "steps": "Download badge as PDF", "expected": "PDF renders correctly" },
+        { "id": "10.11", "name": "Custom fonts", "tags": ["badge", "fonts"], "mode": "manual", "steps": "Upload TTF/WOFF font", "expected": "Font available in editor" },
+        { "id": "10.12", "name": "Font on badge", "tags": ["badge", "fonts"], "mode": "manual", "steps": "Apply custom font to template", "expected": "Renders with correct font" }
+      ]
+    },
+    {
+      "id": "11",
+      "name": "Integration & Sync",
+      "tests": [
+        { "id": "11.1", "name": "Connect integration", "tags": ["sync"], "mode": "manual", "steps": "Set up OAuth or API key connection", "expected": "Status shows 'Connected'" },
+        { "id": "11.2", "name": "Test connection", "tags": ["sync"], "mode": "manual", "steps": "Click test connection", "expected": "Success/failure feedback" },
+        { "id": "11.3", "name": "Discover events", "tags": ["sync"], "mode": "manual", "steps": "Browse events from platform", "expected": "External events listed" },
+        { "id": "11.4", "name": "Map event", "tags": ["sync"], "mode": "manual", "steps": "Link external event to local", "expected": "Mapping saved" },
+        { "id": "11.5", "name": "Initial sync", "tags": ["sync"], "mode": "manual", "steps": "Run first sync", "expected": "Attendees pulled in" },
+        { "id": "11.6", "name": "Incremental sync", "tags": ["sync"], "mode": "manual", "steps": "Modify data externally, re-sync", "expected": "Changes reflected" },
+        { "id": "11.7", "name": "Sync status display", "tags": ["sync"], "mode": "manual", "steps": "Check Data Sync page", "expected": "Status, timing, counts shown" },
+        { "id": "11.8", "name": "Sync freeze", "tags": ["sync"], "mode": "manual", "steps": "Freeze sync for event", "expected": "No syncs occur" },
+        { "id": "11.9", "name": "Real-time check-in push", "tags": ["sync"], "mode": "manual", "steps": "Check in attendee", "expected": "Status pushed to external platform" }
+      ]
+    },
+    {
+      "id": "12",
+      "name": "Notifications",
+      "tests": [
+        { "id": "12.1", "name": "Create notification rule", "tags": ["notifications"], "mode": "manual", "steps": "Add check-in trigger with webhook", "expected": "Rule saved" },
+        { "id": "12.2", "name": "Webhook fires", "tags": ["notifications"], "mode": "manual", "steps": "Check in matching attendee", "expected": "Webhook POST sent" },
+        { "id": "12.3", "name": "SMS notification", "tags": ["notifications"], "mode": "manual", "steps": "Configure SMS trigger", "expected": "SMS sent on check-in" },
+        { "id": "12.4", "name": "Email notification", "tags": ["notifications"], "mode": "manual", "steps": "Configure email trigger", "expected": "Email sent on check-in" },
+        { "id": "12.5", "name": "Participant type filter", "tags": ["notifications"], "mode": "manual", "steps": "Set rule for VIP only", "expected": "Only fires for VIP check-ins" },
+        { "id": "12.6", "name": "Name filter", "tags": ["notifications"], "mode": "manual", "steps": "Set rule for specific name", "expected": "Only fires for matching name" }
+      ]
+    },
+    {
+      "id": "13",
+      "name": "Feature Flags",
+      "tests": [
+        { "id": "13.1", "name": "Features page", "tags": ["features"], "mode": "manual", "steps": "Open License & Features -> Features", "expected": "All features with descriptions" },
+        { "id": "13.2", "name": "Toggle feature", "tags": ["features"], "mode": "manual", "steps": "Super admin toggles a switch", "expected": "State persists on refresh" },
+        {
+          "id": "13.3",
+          "name": "event_sync OFF",
+          "tags": ["features", "smoke"],
+          "mode": "manual",
+          "steps": "Disable event_sync",
+          "expected": "Integrations, Data Sync, Sync Insights hidden"
+        },
+        { "id": "13.4", "name": "event_sync ON", "tags": ["features"], "mode": "manual", "steps": "Re-enable event_sync", "expected": "Sync UI reappears" },
+        { "id": "13.5", "name": "group_checkin flag", "tags": ["features"], "mode": "manual", "steps": "Toggle per account", "expected": "Group option appears/disappears" },
+        { "id": "13.6", "name": "walkin_registration flag", "tags": ["features"], "mode": "manual", "steps": "Toggle per account", "expected": "Walk-in button appears/disappears" },
+        { "id": "13.7", "name": "Premium badge", "tags": ["features"], "mode": "manual", "steps": "Check feature with Premium tier", "expected": "'Premium' badge shown" },
+        { "id": "13.8", "name": "Coming Soon badge", "tags": ["features"], "mode": "manual", "steps": "Check unbuilt feature", "expected": "'Coming Soon' badge shown" },
+        { "id": "13.9", "name": "Non-super-admin view", "tags": ["features"], "mode": "manual", "steps": "Login as admin", "expected": "Features visible, toggles disabled" }
+      ]
+    },
+    {
+      "id": "14",
+      "name": "AI Features (Claude)",
+      "tests": [
+        { "id": "14.1", "name": "Setup assistant", "tags": ["ai"], "mode": "manual", "steps": "Open event, launch assistant", "expected": "Chat responds" },
+        { "id": "14.2", "name": "Tool use", "tags": ["ai"], "mode": "manual", "steps": "Ask assistant to set printer", "expected": "Tool executes, setting applied" },
+        { "id": "14.3", "name": "Badge AI chat", "tags": ["ai"], "mode": "manual", "steps": "Open badge designer AI chat", "expected": "Receives design suggestions" },
+        { "id": "14.4", "name": "Feedback analysis", "tags": ["ai"], "mode": "manual", "steps": "Open Feedback with entries", "expected": "AI analysis renders" },
+        { "id": "14.5", "name": "Feedback conversation", "tags": ["ai"], "mode": "manual", "steps": "Submit feedback via widget", "expected": "Conversational flow works" },
+        { "id": "14.6", "name": "AI unavailable", "tags": ["ai", "negative"], "mode": "manual", "steps": "Remove ANTHROPIC_API_KEY, restart", "expected": "Graceful error, no crash" }
+      ]
+    },
+    {
+      "id": "15",
+      "name": "Configuration Templates",
+      "tests": [
+        { "id": "15.1", "name": "Create template from event", "tags": ["templates"], "mode": "manual", "steps": "Save configured event as template", "expected": "Template saved" },
+        { "id": "15.2", "name": "Apply template to new event", "tags": ["templates"], "mode": "manual", "steps": "Create event, apply configuration", "expected": "Config applied" },
+        { "id": "15.3", "name": "Manual setup", "tags": ["templates"], "mode": "manual", "steps": "Create event, choose manual setup", "expected": "Minimal config applied" },
+        { "id": "15.4", "name": "Copy from event", "tags": ["templates"], "mode": "manual", "steps": "Create event, copy from existing", "expected": "Config copied" },
+        { "id": "15.5", "name": "Edit template", "tags": ["templates"], "mode": "manual", "steps": "Modify saved template", "expected": "Changes persist" },
+        { "id": "15.6", "name": "Delete template", "tags": ["templates"], "mode": "manual", "steps": "Delete a template", "expected": "Removed from list" }
+      ]
+    },
+    {
+      "id": "16",
+      "name": "Reports & Exports",
+      "tests": [
+        { "id": "16.1", "name": "Event overview stats", "tags": ["reports"], "mode": "manual", "steps": "Open event dashboard", "expected": "Check-in count, progress charts render" },
+        { "id": "16.2", "name": "Export attendee CSV", "tags": ["reports", "export"], "mode": "manual", "steps": "Click CSV export", "expected": "Downloads with correct columns" },
+        { "id": "16.3", "name": "Export attendee Excel", "tags": ["reports", "export"], "mode": "manual", "steps": "Click Excel export", "expected": "Downloads with formatting" },
+        { "id": "16.4", "name": "Timestamps in exports", "tags": ["reports", "export"], "mode": "manual", "steps": "Check exported timestamps", "expected": "Event timezone applied" },
+        { "id": "16.5", "name": "Session report", "tags": ["reports", "sessions"], "mode": "manual", "steps": "View session attendance report", "expected": "Counts and durations correct" }
+      ]
+    },
+    {
+      "id": "17",
+      "name": "Locations & Settings",
+      "tests": [
+        { "id": "17.1", "name": "Create location", "tags": ["settings"], "mode": "manual", "steps": "Add location with name", "expected": "Location created" },
+        { "id": "17.2", "name": "Assign location to event", "tags": ["settings"], "mode": "manual", "steps": "Set event location", "expected": "Timezone auto-fills" },
+        { "id": "17.3", "name": "System settings", "tags": ["settings"], "mode": "manual", "steps": "Super admin opens settings", "expected": "Settings page loads" },
+        { "id": "17.4", "name": "Audit log", "tags": ["settings"], "mode": "manual", "steps": "Super admin opens audit log", "expected": "Log entries display" },
+        { "id": "17.5", "name": "Data retention policy", "tags": ["settings"], "mode": "manual", "steps": "Set retention days", "expected": "Policy saved" }
+      ]
+    },
+    {
+      "id": "18",
+      "name": "Performance & Bundle",
+      "tests": [
+        {
+          "id": "18.1",
+          "name": "Initial load size",
+          "tags": ["perf", "smoke"],
+          "mode": "manual",
+          "steps": "Load /login, check Network tab",
+          "expected": "Main JS < 600KB gzipped"
+        },
+        { "id": "18.2", "name": "Lazy loading", "tags": ["perf"], "mode": "manual", "steps": "Navigate to Dashboard", "expected": "Recharts chunk loads on demand" },
+        { "id": "18.3", "name": "Vendor chunks", "tags": ["perf"], "mode": "manual", "steps": "Check Network tab", "expected": "Separate chunks for recharts, qrcode, jspdf, radix-ui" },
+        { "id": "18.4", "name": "Error boundary", "tags": ["perf"], "mode": "manual", "steps": "(Dev) Force error in lazy page", "expected": "'Something went wrong' with retry" },
+        {
+          "id": "18.5",
+          "name": "No console errors",
+          "tags": ["perf"],
+          "mode": "assisted",
+          "steps": "Navigate 5+ pages",
+          "expected": "No red errors in console",
+          "auto": {
+            "actions": [],
+            "assertions": [
+              { "type": "console_clean" }
+            ]
+          }
+        },
+        { "id": "18.6", "name": "Rate limiter cleanup", "tags": ["perf"], "mode": "manual", "steps": "(Dev) Check memory after 1hr", "expected": "Rate limiter Maps not growing" }
+      ]
+    },
+    {
+      "id": "19",
+      "name": "S3 Storage",
+      "tests": [
+        { "id": "19.1", "name": "Upload image", "tags": ["s3"], "mode": "manual", "steps": "Upload branding image", "expected": "Stored in S3" },
+        { "id": "19.2", "name": "Serve image", "tags": ["s3"], "mode": "manual", "steps": "Load page with uploaded image", "expected": "Renders from S3" },
+        { "id": "19.3", "name": "Local fallback", "tags": ["s3"], "mode": "manual", "steps": "Remove S3 vars, restart", "expected": "Falls back to filesystem" }
+      ]
+    },
+    {
+      "id": "20",
+      "name": "UI & Responsiveness",
+      "tests": [
+        {
+          "id": "20.1",
+          "name": "Dark mode toggle",
+          "tags": ["ui"],
+          "mode": "assisted",
+          "steps": "Click theme toggle",
+          "expected": "Theme switches, persists",
+          "auto": {
+            "actions": [
+              { "type": "click", "selector": "testid:button-theme-toggle" },
+              { "type": "wait", "value": 500 }
+            ],
+            "assertions": [
+              { "type": "page_loaded" }
+            ]
+          }
+        },
+        {
+          "id": "20.2",
+          "name": "Sidebar collapse",
+          "tags": ["ui"],
+          "mode": "assisted",
+          "steps": "Click sidebar toggle",
+          "expected": "Collapses to icon-only",
+          "auto": {
+            "actions": [
+              { "type": "click", "selector": "testid:button-sidebar-toggle" },
+              { "type": "wait", "value": 500 }
+            ],
+            "assertions": [
+              { "type": "element_visible", "selector": "testid:sidebar-main" }
+            ]
+          }
+        },
+        { "id": "20.3", "name": "Mobile layout", "tags": ["ui", "responsive"], "mode": "manual", "steps": "Resize to 375px width", "expected": "Layout adapts, no horizontal scroll" },
+        { "id": "20.4", "name": "Tablet layout", "tags": ["ui", "responsive"], "mode": "manual", "steps": "Resize to 768px", "expected": "Sidebar auto-collapses" },
+        { "id": "20.5", "name": "Kiosk branding", "tags": ["ui", "kiosk"], "mode": "manual", "steps": "Set custom branding on event", "expected": "Kiosk header shows custom logo/colors" }
+      ]
+    }
+  ]
+}

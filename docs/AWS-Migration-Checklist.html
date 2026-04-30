@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Greet &mdash; AWS Self-Hosted Migration Checklist</title>
+<style>
+  @page {
+    size: letter;
+    margin: 0.75in 1in;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.55;
+    color: #1a1a1a;
+    max-width: 8.5in;
+    margin: 0 auto;
+    padding: 0.75in 1in;
+    background: #fff;
+  }
+
+  /* ── Header ── */
+  .doc-header {
+    border-bottom: 3px solid #0f4c81;
+    padding-bottom: 18px;
+    margin-bottom: 28px;
+  }
+  .doc-header h1 {
+    font-size: 22pt;
+    font-weight: 700;
+    color: #0f4c81;
+    margin-bottom: 4px;
+    letter-spacing: -0.3px;
+  }
+  .doc-header .subtitle {
+    font-size: 11pt;
+    color: #555;
+    margin-bottom: 10px;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 32px;
+    font-size: 9.5pt;
+    color: #444;
+  }
+  .meta-grid span.label { font-weight: 600; color: #1a1a1a; }
+
+  /* ── Sections ── */
+  h2 {
+    font-size: 14pt;
+    font-weight: 700;
+    color: #0f4c81;
+    margin: 32px 0 10px;
+    padding-bottom: 4px;
+    border-bottom: 1.5px solid #d0d7de;
+    page-break-after: avoid;
+  }
+  h3 {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #24292f;
+    margin: 18px 0 8px;
+    page-break-after: avoid;
+  }
+  h4 {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #444;
+    margin: 14px 0 6px;
+  }
+
+  p { margin: 6px 0 10px; }
+  ul, ol { margin: 6px 0 12px 22px; }
+  li { margin-bottom: 3px; }
+  strong { font-weight: 600; }
+  em { font-style: italic; color: #555; }
+  code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 9pt;
+    background: #f0f3f6;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ── Code blocks ── */
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 8px 0 16px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 8.5pt;
+    line-height: 1.6;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+  }
+  .code-label {
+    display: inline-block;
+    background: #0f4c81;
+    color: #fff;
+    font-size: 8pt;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px 3px 0 0;
+    margin-bottom: -1px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  }
+
+  /* ── Tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 16px;
+    font-size: 9.5pt;
+    page-break-inside: avoid;
+  }
+  thead th {
+    background: #0f4c81;
+    color: #fff;
+    font-weight: 600;
+    text-align: left;
+    padding: 7px 10px;
+    font-size: 9pt;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  tbody td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #e1e4e8;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: #f8f9fb; }
+  tbody tr:last-child td { border-bottom: 2px solid #d0d7de; }
+  td.highlight { font-weight: 600; color: #0f4c81; }
+  td.cost { text-align: right; font-family: 'SF Mono', monospace; font-size: 9pt; }
+
+  /* Total row */
+  tr.total td {
+    font-weight: 700;
+    border-top: 2px solid #0f4c81;
+    background: #e8f4fd;
+  }
+
+  /* ── Callout boxes ── */
+  .callout {
+    background: #fff8e1;
+    border-left: 4px solid #f9a825;
+    padding: 10px 14px;
+    margin: 10px 0 14px;
+    font-size: 9.5pt;
+    border-radius: 0 4px 4px 0;
+    page-break-inside: avoid;
+  }
+  .callout.info {
+    background: #e8f4fd;
+    border-left-color: #0f4c81;
+  }
+  .callout.success {
+    background: #e8f5e9;
+    border-left-color: #2e7d32;
+  }
+
+  /* ── Numbered steps ── */
+  .step-list {
+    counter-reset: step;
+    list-style: none;
+    margin-left: 0;
+    padding-left: 0;
+  }
+  .step-list li {
+    counter-increment: step;
+    padding: 8px 0 8px 36px;
+    position: relative;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  .step-list li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 24px;
+    height: 24px;
+    background: #0f4c81;
+    color: #fff;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 24px;
+    font-size: 10pt;
+    font-weight: 600;
+  }
+
+  /* ── Comparison table ── */
+  .comparison thead th:first-child { width: 22%; }
+
+  /* ── Footer ── */
+  .doc-footer {
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1.5px solid #d0d7de;
+    font-size: 9pt;
+    color: #666;
+    text-align: center;
+  }
+
+  @media print {
+    body { padding: 0; }
+    h2 { page-break-after: avoid; }
+    table, pre, .callout { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- HEADER                                                      -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="doc-header">
+  <h1>Greet: AWS Self-Hosted Migration Checklist</h1>
+  <div class="subtitle">Complete migration guide from Replit to standalone AWS deployment</div>
+  <div class="meta-grid">
+    <div><span class="label">Scope:</span> Docker containerization, infrastructure, security, and cost</div>
+    <div><span class="label">Date:</span> April 2026</div>
+    <div><span class="label">Companion:</span> Checkmate-HRD-AWS &middot; AWS-Capacity-Planning-Guide</div>
+    <div><span class="label">Audience:</span> Certain DevOps &amp; Engineering</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 1. DOCKER                                                   -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>1. Docker Containerization</h2>
+
+<h3>1.1 Dockerfile</h3>
+
+<span class="code-label">Dockerfile</span>
+<pre><code># Stage 1: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2: Production
+FROM node:20-alpine AS production
+WORKDIR /app
+RUN apk add --no-cache dumb-init
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+ENV NODE_ENV=production
+EXPOSE 5000
+USER node
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/index.js"]</code></pre>
+
+<ul>
+  <li><strong>Multi-stage build</strong> keeps the final image small (~200 MB vs ~1 GB)</li>
+  <li><strong><code>dumb-init</code></strong> ensures proper signal handling (graceful shutdown)</li>
+  <li>Runs as non-root <code>node</code> user for security</li>
+  <li>Alpine base for minimal attack surface</li>
+</ul>
+
+<h3>1.2 .dockerignore</h3>
+
+<span class="code-label">.dockerignore</span>
+<pre><code>node_modules
+dist
+.git
+*.md
+.env</code></pre>
+
+<h3>1.3 docker-compose.yml (Local Development / Testing)</h3>
+
+<span class="code-label">docker-compose.yml</span>
+<pre><code>version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: checkmate
+      POSTGRES_USER: checkmate
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checkmate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:</code></pre>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 2. AWS INFRASTRUCTURE                                       -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>2. AWS Infrastructure Checklist</h2>
+
+<h3>2.1 Networking &amp; VPC</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">VPC</td><td>1 VPC with public + private subnets across 2 AZs</td><td class="cost">Free</td></tr>
+    <tr><td class="highlight">Internet Gateway</td><td>For ALB in public subnets</td><td class="cost">Free</td></tr>
+    <tr><td class="highlight">NAT Gateway</td><td>For app containers to reach internet (Twilio, Anthropic, PrintNode, etc.)</td><td class="cost">~$35/mo</td></tr>
+    <tr><td class="highlight">Security Groups</td><td>ALB: inbound 443 only; App: inbound from ALB only; DB: inbound from App only</td><td class="cost">Free</td></tr>
+  </tbody>
+</table>
+
+<h3>2.2 Compute (Application)</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">ECS Fargate (recommended)</td><td>Serverless containers, no server management</td><td class="cost">~$35&ndash;60/mo</td></tr>
+    <tr><td>Task definition</td><td>0.5 vCPU, 1 GB RAM (staging) / 2 vCPU, 4 GB (production)</td><td class="cost"></td></tr>
+    <tr><td>Auto-scaling</td><td>1&ndash;3 tasks (staging) / 2&ndash;8 tasks (production)</td><td class="cost"></td></tr>
+    <tr><td class="highlight">Alternative: EC2</td><td>t3.medium (2 vCPU, 4 GB RAM) &mdash; requires OS patching, Docker install</td><td class="cost">~$30&ndash;40/mo</td></tr>
+  </tbody>
+</table>
+
+<div class="callout info">
+  <strong>Recommendation:</strong> ECS Fargate &mdash; no servers to manage, pairs well with Docker, and Certain already uses AWS. OS patching is handled by AWS.
+</div>
+
+<h3>2.3 Database</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">RDS PostgreSQL</td><td>db.t3.micro (staging) / db.t3.medium (production) &mdash; multi-AZ optional</td><td class="cost">$15&ndash;30/mo</td></tr>
+    <tr><td>Storage</td><td>20 GB gp3 with auto-scaling</td><td class="cost">$2&ndash;3/mo</td></tr>
+    <tr><td>Automated backups</td><td>7-day retention (free with RDS)</td><td class="cost">Free</td></tr>
+    <tr><td>Encryption at rest</td><td>AES-256 via AWS KMS (enabled by default)</td><td class="cost">Free</td></tr>
+    <tr><td class="highlight">Alternative: Aurora Serverless v2</td><td>Auto-scales, pauses when idle, higher availability</td><td class="cost">$30&ndash;80/mo</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <strong>Important:</strong> The app currently uses Neon Serverless PostgreSQL (<code>@neondatabase/serverless</code>). For AWS, switch to standard <code>pg</code> client with connection pooling via <code>pg-pool</code>.
+</div>
+
+<h3>2.4 Load Balancer &amp; SSL</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">Application Load Balancer</td><td>Terminates SSL, routes to ECS tasks</td><td class="cost">$18&ndash;25/mo</td></tr>
+    <tr><td>ACM Certificate</td><td>Free SSL/TLS certificate for your domain</td><td class="cost">Free</td></tr>
+    <tr><td>Health checks</td><td>ALB checks <code>/ready</code> endpoint on app</td><td class="cost">Free</td></tr>
+    <tr><td>HTTPS redirect</td><td>Listener rule: redirect HTTP 80 &rarr; HTTPS 443</td><td class="cost">Free</td></tr>
+  </tbody>
+</table>
+
+<h3>2.5 DNS</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">Route 53 Hosted Zone</td><td>DNS for your domain</td><td class="cost">$0.50/mo</td></tr>
+    <tr><td>A/AAAA Records</td><td>Alias to ALB</td><td class="cost">Free</td></tr>
+    <tr><td>Health checks (optional)</td><td>Route 53 health monitoring</td><td class="cost">$0.50/mo</td></tr>
+  </tbody>
+</table>
+
+<h3>2.6 Object Storage (Badge Assets, File Uploads)</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">S3 Bucket</td><td>Private bucket for uploads, badge images, fonts</td><td class="cost">$1&ndash;5/mo</td></tr>
+    <tr><td>Bucket policy</td><td>Block all public access; app accesses via IAM role</td><td class="cost">Free</td></tr>
+    <tr><td>CloudFront (optional)</td><td>CDN for serving badge assets/images faster</td><td class="cost">$1&ndash;5/mo</td></tr>
+  </tbody>
+</table>
+
+<div class="callout info">
+  <strong>Code change required:</strong> Replace Replit Object Storage SDK calls with AWS S3 SDK (<code>@aws-sdk/client-s3</code>).<br>
+  Affected files: <code>server/replit_integrations/object_storage/objectStorage.ts</code>, <code>server/replit_integrations/object_storage/routes.ts</code>
+</div>
+
+<h3>2.7 Secrets Management</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">AWS Secrets Manager</td><td>Store all application secrets (10 total)</td><td class="cost">~$4/mo</td></tr>
+  </tbody>
+</table>
+
+<h4>Secrets to Migrate</h4>
+<table>
+  <thead><tr><th>Secret</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><code>SESSION_SECRET</code></td><td>Express session signing</td></tr>
+    <tr><td><code>CREDENTIAL_ENCRYPTION_KEY</code></td><td>Integration credential encryption</td></tr>
+    <tr><td><code>DATABASE_URL</code></td><td>PostgreSQL connection string</td></tr>
+    <tr><td><code>PRINTNODE_API_KEY</code></td><td>Cloud printing service</td></tr>
+    <tr><td><code>RESEND_API_KEY</code></td><td>Email delivery (OTP, notifications)</td></tr>
+    <tr><td><code>TWILIO_ACCOUNT_SID</code></td><td>SMS authentication</td></tr>
+    <tr><td><code>TWILIO_AUTH_TOKEN</code></td><td>SMS authentication</td></tr>
+    <tr><td><code>TWILIO_PHONE_NUMBER</code></td><td>SMS sender number</td></tr>
+    <tr><td><code>SLACK_FEEDBACK_WEBHOOK_URL</code></td><td>Feedback alerts</td></tr>
+    <tr><td><code>ANTHROPIC_API_KEY</code></td><td>AI badge assistant &amp; feedback analysis</td></tr>
+  </tbody>
+</table>
+
+<p>Inject these as environment variables into ECS task definitions via Secrets Manager references.</p>
+
+<h3>2.8 Authentication Changes</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">Replace Replit Auth (OIDC)</td><td>Switch to self-contained OTP authentication</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Options:</strong></p>
+<ul>
+  <li><strong>AWS Cognito</strong> &mdash; managed auth with OAuth2/OIDC ($0.0055/MAU after 50k free tier)</li>
+  <li><strong>Auth0</strong> &mdash; third-party, easy setup (free tier up to 7,500 MAU)</li>
+  <li><strong>Self-managed (recommended)</strong> &mdash; the app already has email/SMS OTP login via Resend + Twilio; make that the primary auth and remove the Replit OIDC dependency entirely</li>
+</ul>
+
+<div class="callout success">
+  The email OTP and SMS OTP flows (Resend + Twilio) work independently of Replit and will carry over as-is. No third-party identity provider required.
+</div>
+
+<h3>2.9 CI/CD Pipeline</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">ECR (Container Registry)</td><td>Store Docker images</td><td class="cost">$1&ndash;2/mo</td></tr>
+    <tr><td class="highlight">GitHub Actions (recommended)</td><td>Build &rarr; push to ECR &rarr; deploy to ECS</td><td class="cost">Free (included)</td></tr>
+    <tr><td>Alternative: AWS CodePipeline</td><td>Source &rarr; Build &rarr; Deploy</td><td class="cost">~$1/mo</td></tr>
+  </tbody>
+</table>
+
+<h4>Recommended GitHub Actions Workflow</h4>
+<ol>
+  <li>On push to <code>main</code>: build Docker image</li>
+  <li>Push image to ECR</li>
+  <li>Update ECS service to use new image (rolling deployment)</li>
+  <li>Run database migrations (<code>npm run db:push</code>)</li>
+</ol>
+
+<h3>2.10 Monitoring &amp; Logging</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">CloudWatch Logs</td><td>Container stdout/stderr auto-captured by ECS</td><td class="cost">$3&ndash;5/mo</td></tr>
+    <tr><td class="highlight">CloudWatch Alarms</td><td>CPU &gt; 80%, error rate, unhealthy targets</td><td class="cost">Free (10 alarms)</td></tr>
+    <tr><td>CloudWatch Dashboards</td><td>Application metrics overview</td><td class="cost">$3/mo</td></tr>
+    <tr><td>AWS X-Ray (optional)</td><td>Distributed tracing for API calls</td><td class="cost">$5/mo</td></tr>
+  </tbody>
+</table>
+
+<h3>2.11 Security &amp; Compliance</h3>
+<table>
+  <thead><tr><th>Item</th><th>Details</th><th class="cost">Est. Cost</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">AWS WAF</td><td>Protect ALB against SQL injection, XSS, bad bots</td><td class="cost">$6/mo + $0.60/M req</td></tr>
+    <tr><td class="highlight">AWS Shield Standard</td><td>DDoS protection (included with ALB)</td><td class="cost">Free</td></tr>
+    <tr><td class="highlight">IAM Roles</td><td>ECS task role (S3, Secrets Manager access); no access keys in code</td><td class="cost">Free</td></tr>
+    <tr><td>VPC Flow Logs</td><td>Network traffic logging for auditing</td><td class="cost">$1&ndash;3/mo</td></tr>
+    <tr><td>GuardDuty (optional)</td><td>Threat detection across AWS account</td><td class="cost">$4&ndash;8/mo</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 3. CODE CHANGES                                             -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>3. Code Changes Required</h2>
+
+<table>
+  <thead><tr><th>Change</th><th>Effort</th><th>Files Affected</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">Replace Replit Object Storage &rarr; S3</td><td>1&ndash;2 days</td><td><code>server/replit_integrations/object_storage/*</code></td></tr>
+    <tr><td class="highlight">Replace Replit Auth OIDC &rarr; OTP-only</td><td>1&ndash;3 days</td><td><code>server/replitAuth.ts</code>, login flows</td></tr>
+    <tr><td class="highlight">Update DATABASE_URL format</td><td>1 hour</td><td><code>server/db.ts</code>, drizzle config</td></tr>
+    <tr><td class="highlight">Switch <code>@neondatabase/serverless</code> &rarr; <code>pg</code> pool</td><td>2&ndash;4 hours</td><td><code>server/db.ts</code>, <code>drizzle.config.ts</code></td></tr>
+    <tr><td>Environment variable loading (Secrets Manager)</td><td>2&ndash;4 hours</td><td><code>server/index.ts</code> startup</td></tr>
+    <tr><td>Add <code>/api/health</code> endpoint for ALB</td><td>15 minutes</td><td><code>server/routes.ts</code></td></tr>
+    <tr><td>Update CORS origins for new domain</td><td>15 minutes</td><td><code>server/index.ts</code></td></tr>
+    <tr><td>Update cookie <code>sameSite</code> / <code>secure</code> settings</td><td>15 minutes</td><td><code>server/replitAuth.ts</code></td></tr>
+  </tbody>
+</table>
+
+<div class="callout info">
+  <strong>Total estimated code migration effort: 3&ndash;5 days</strong>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 4. COST SUMMARY                                             -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>4. Monthly Cost Summary</h2>
+
+<table>
+  <thead><tr><th>Category</th><th class="cost">Low Estimate</th><th class="cost">High Estimate</th></tr></thead>
+  <tbody>
+    <tr><td>ECS Fargate (compute)</td><td class="cost">$35</td><td class="cost">$60</td></tr>
+    <tr><td>RDS PostgreSQL</td><td class="cost">$17</td><td class="cost">$33</td></tr>
+    <tr><td>Application Load Balancer</td><td class="cost">$18</td><td class="cost">$25</td></tr>
+    <tr><td>NAT Gateway</td><td class="cost">$35</td><td class="cost">$35</td></tr>
+    <tr><td>S3 (object storage)</td><td class="cost">$1</td><td class="cost">$5</td></tr>
+    <tr><td>ECR (container registry)</td><td class="cost">$1</td><td class="cost">$2</td></tr>
+    <tr><td>Secrets Manager</td><td class="cost">$4</td><td class="cost">$4</td></tr>
+    <tr><td>Route 53 (DNS)</td><td class="cost">$1</td><td class="cost">$1</td></tr>
+    <tr><td>CloudWatch (logs + alarms)</td><td class="cost">$3</td><td class="cost">$8</td></tr>
+    <tr><td>WAF (optional)</td><td class="cost">$0</td><td class="cost">$7</td></tr>
+    <tr class="total"><td>Total</td><td class="cost">~$115/mo</td><td class="cost">~$180/mo</td></tr>
+  </tbody>
+</table>
+
+<p><em>Costs assume alpha/beta scale (~100&ndash;500 concurrent users). Production scale with multi-AZ RDS, multiple Fargate tasks, and CloudFront would be $200&ndash;350/mo.</em></p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 5. MIGRATION ORDER                                          -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>5. Migration Order (Recommended)</h2>
+
+<ol class="step-list">
+  <li><strong>Create Docker image</strong> &mdash; Dockerfile, build, test locally with docker-compose</li>
+  <li><strong>Provision AWS infrastructure</strong> &mdash; VPC, subnets, security groups, RDS, S3, ALB</li>
+  <li><strong>Code changes</strong> &mdash; S3 integration, database driver swap, auth provider swap</li>
+  <li><strong>Deploy to ECS</strong> &mdash; Push image to ECR, create task definition, create ECS service</li>
+  <li><strong>DNS cutover</strong> &mdash; Point your domain to the ALB</li>
+  <li><strong>Smoke test</strong> &mdash; Full end-to-end: login, check-in, badge printing, kiosk mode</li>
+  <li><strong>Monitor</strong> &mdash; Watch CloudWatch logs for first 48 hours</li>
+  <li><strong>Decommission Replit deployment</strong> &mdash; After confirmed stable</li>
+</ol>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- 6. KEY DIFFERENCES                                          -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>6. Key Differences from Replit</h2>
+
+<table class="comparison">
+  <thead><tr><th>Capability</th><th>Replit</th><th>AWS (Self-Hosted)</th></tr></thead>
+  <tbody>
+    <tr><td class="highlight">Deployment</td><td>One-click publish</td><td>CI/CD pipeline (GitHub Actions &rarr; ECR &rarr; ECS)</td></tr>
+    <tr><td class="highlight">SSL certificates</td><td>Automatic</td><td>ACM + ALB configuration</td></tr>
+    <tr><td class="highlight">Secrets</td><td>Built-in secrets UI</td><td>Secrets Manager + IAM policies</td></tr>
+    <tr><td class="highlight">Database</td><td>Built-in Neon PG</td><td>RDS (Certain manages backups, scaling)</td></tr>
+    <tr><td class="highlight">Object storage</td><td>Built-in SDK</td><td>S3 + SDK swap</td></tr>
+    <tr><td class="highlight">Auth provider</td><td>Replit OIDC built-in</td><td>Self-contained OTP (Resend + Twilio)</td></tr>
+    <tr><td class="highlight">Scaling</td><td>Automatic</td><td>Configure auto-scaling policies</td></tr>
+    <tr><td class="highlight">OS/Runtime patching</td><td>Automatic</td><td>Fargate-managed (container host) + CI for app image</td></tr>
+    <tr><td class="highlight">Rollback</td><td>Built-in checkpoints</td><td>ECS rolling deployments + RDS snapshots</td></tr>
+    <tr><td class="highlight">Uptime monitoring</td><td>Built-in</td><td>CloudWatch + Route 53 health checks</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- FOOTER                                                      -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="doc-footer">
+  Prepared by Brad Neuman &nbsp;&middot;&nbsp; Certain, Inc. &nbsp;&middot;&nbsp; April 2026<br>
+  <em>Companion documents: Checkmate-HRD-AWS &middot; AWS-Capacity-Planning-Guide</em>
+</div>
+
+</body>
+</html>

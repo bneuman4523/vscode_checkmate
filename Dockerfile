@@ -29,6 +29,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=5000
 
+# AWS CLI for SSM Parameter Store access at bootstrap
+RUN apk add --no-cache aws-cli
+
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 appuser
 
@@ -39,14 +42,17 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/migrations ./migrations
 COPY drizzle.config.ts ./
+COPY docker-entrypoint.sh ./
 
-RUN chown -R appuser:nodejs /app
+RUN chmod +x docker-entrypoint.sh && \
+    chown -R appuser:nodejs /app
 
 USER appuser
 
 EXPOSE 5000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:5000/health || exit 1
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]

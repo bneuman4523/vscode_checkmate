@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createHash, randomBytes } from "crypto";
 import { storage } from "../storage";
 import { db } from "../db";
-import { inboundApiKeys, events, attendees, sessions, sessionRegistrations } from "@shared/schema";
+import { inboundApiKeys, events, attendees, sessions, sessionRegistrations, checkInLog, eventBuyerQuestions, attendeeWorkflowResponses, eventDisclaimers, attendeeSignatures } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import { sanitizeHtml } from "./shared";
@@ -549,6 +549,201 @@ export function registerInboundApiRoutes(app: Express): void {
       }
       logger.error({ err: error }, "Error processing inbound session registrations");
       res.status(500).json({ error: "Failed to process session registrations" });
+    }
+  });
+
+  // GET /api/v1/inbound/attended — Retrieve checked-in attendees for an event
+  app.get("/api/v1/inbound/attended", inboundApiAuth, inboundLimiter, async (req: InboundRequest, res) => {
+    try {
+      const customerId = req.inboundCustomerId!;
+      const eventCode = req.query.eventCode as string;
+      const accountCode = req.query.accountCode as string | undefined;
+
+      if (!eventCode) {
+        return res.status(400).json({ error: "eventCode query parameter is required" });
+      }
+
+      // Pagination params
+      const MAX_LIMIT = 500;
+      const DEFAULT_LIMIT = 100;
+      const limit = Math.min(Math.max(parseInt(req.query.limit as string) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+      const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+
+      // Optional filters
+      const since = req.query.since as string | undefined; // ISO 8601 — check-ins after this time
+      const before = req.query.before as string | undefined; // ISO 8601 — check-ins before this time
+      const participantType = req.query.participantType as string | undefined;
+      const badgePrinted = req.query.badgePrinted as string | undefined; // "true" or "false"
+      const sortOrder = (req.query.sort as string)?.toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+      const event = await resolveEvent(customerId, eventCode, accountCode);
+      if (!event) {
+        return res.status(404).json({ error: `Event not found for code: ${eventCode}` });
+      }
+
+      // Build query conditions
+      const conditions = [
+        eq(attendees.eventId, event.id),
+        eq(attendees.checkedIn, true),
+      ];
+
+      // Get total count first (before pagination)
+      const allCheckedIn = await db.select()
+        .from(attendees)
+        .where(and(...conditions));
+
+      // Apply optional filters
+      let filtered = allCheckedIn;
+
+      if (since) {
+        const sinceDate = new Date(since);
+        if (isNaN(sinceDate.getTime())) {
+          return res.status(400).json({ error: "Invalid 'since' parameter — expected ISO 8601 datetime" });
+        }
+        filtered = filtered.filter(a => a.checkedInAt && new Date(a.checkedInAt) > sinceDate);
+      }
+
+      if (before) {
+        const beforeDate = new Date(before);
+        if (isNaN(beforeDate.getTime())) {
+          return res.status(400).json({ error: "Invalid 'before' parameter — expected ISO 8601 datetime" });
+        }
+        filtered = filtered.filter(a => a.checkedInAt && new Date(a.checkedInAt) < beforeDate);
+      }
+
+      if (participantType) {
+        filtered = filtered.filter(a => a.participantType === participantType);
+      }
+
+      if (badgePrinted === 'true') {
+        filtered = filtered.filter(a => a.badgePrinted);
+      } else if (badgePrinted === 'false') {
+        filtered = filtered.filter(a => !a.badgePrinted);
+      }
+
+      // Sort by check-in time
+      filtered.sort((a, b) => {
+        const ta = a.checkedInAt ? new Date(a.checkedInAt).getTime() : 0;
+        const tb = b.checkedInAt ? new Date(b.checkedInAt).getTime() : 0;
+        return sortOrder === 'asc' ? ta - tb : tb - ta;
+      });
+
+      const totalFiltered = filtered.length;
+      const page = filtered.slice(offset, offset + limit);
+
+      if (page.length === 0) {
+        await logInboundActivity(req, "inbound_attended_read", { eventCode, count: 0 });
+        return res.json({
+          success: true,
+          eventCode,
+          pagination: { total: totalFiltered, limit, offset, hasMore: false },
+          attendees: [],
+        });
+      }
+
+      // Get all workflow questions for this event
+      const questions = await db.select()
+        .from(eventBuyerQuestions)
+        .where(eq(eventBuyerQuestions.eventId, event.id));
+
+      // Get all workflow responses for this event
+      const allResponses = await db.select()
+        .from(attendeeWorkflowResponses)
+        .where(eq(attendeeWorkflowResponses.eventId, event.id));
+
+      // Get all disclaimers for this event
+      const disclaimers = await db.select()
+        .from(eventDisclaimers)
+        .where(eq(eventDisclaimers.eventId, event.id));
+
+      // Get all signatures for this event
+      const allSignatures = await db.select()
+        .from(attendeeSignatures)
+        .where(eq(attendeeSignatures.eventId, event.id));
+
+      // Get check-in log entries
+      const checkInLogs = await db.select()
+        .from(checkInLog)
+        .where(eq(checkInLog.eventId, event.id));
+
+      // Build response for paginated attendees
+      const attendeeList = page.map(attendee => {
+        // Workflow question responses
+        const responses = allResponses
+          .filter(r => r.attendeeId === attendee.id)
+          .map(r => {
+            const question = questions.find(q => q.id === r.questionId);
+            return {
+              question: question?.questionText || null,
+              questionType: question?.questionType || null,
+              answer: r.responseValues && r.responseValues.length > 0
+                ? r.responseValues
+                : r.responseValue || null,
+            };
+          });
+
+        // Disclaimer signatures
+        const signatures = allSignatures
+          .filter(s => s.attendeeId === attendee.id)
+          .map(s => {
+            const disclaimer = disclaimers.find(d => d.id === s.disclaimerId);
+            return {
+              disclaimerTitle: disclaimer?.title || null,
+              signedAt: s.signedAt,
+              signatureFileUrl: s.signatureFileUrl || null,
+              thumbnailFileUrl: s.thumbnailFileUrl || null,
+            };
+          });
+
+        // Check-in log (most recent)
+        const log = checkInLogs
+          .filter(l => l.attendeeId === attendee.id)
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+
+        return {
+          externalId: attendee.externalId,
+          externalProfileId: attendee.externalProfileId,
+          firstName: attendee.firstName,
+          lastName: attendee.lastName,
+          email: attendee.email,
+          company: attendee.company,
+          title: attendee.title,
+          participantType: attendee.participantType,
+          registrationStatus: attendee.registrationStatus,
+          registrationStatusLabel: attendee.registrationStatusLabel,
+          orderCode: attendee.orderCode,
+          customFields: attendee.customFields,
+          checkIn: {
+            checkedInAt: attendee.checkedInAt,
+            checkedInBy: log?.checkedInBy || null,
+            badgePrinted: attendee.badgePrinted,
+            badgePrintedAt: attendee.badgePrintedAt,
+          },
+          workflowResponses: responses.length > 0 ? responses : null,
+          disclaimerSignatures: signatures.length > 0 ? signatures : null,
+        };
+      });
+
+      const hasMore = offset + limit < totalFiltered;
+
+      logger.info({ customerId, eventCode, total: totalFiltered, returned: attendeeList.length, offset, limit }, "Inbound attended list retrieved");
+      await logInboundActivity(req, "inbound_attended_read", { eventCode, total: totalFiltered, returned: attendeeList.length, offset, limit });
+
+      res.json({
+        success: true,
+        eventCode,
+        pagination: {
+          total: totalFiltered,
+          limit,
+          offset,
+          hasMore,
+          nextOffset: hasMore ? offset + limit : null,
+        },
+        attendees: attendeeList,
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "Error retrieving attended list");
+      res.status(500).json({ error: "Failed to retrieve attended list" });
     }
   });
 

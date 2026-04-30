@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Greet QA Runner",
+  "version": "1.0.0",
+  "description": "Internal QA test runner for the Greet event check-in platform",
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://54.241.143.130:5000/*",
+    "http://localhost:5001/*",
+    "http://localhost:5000/*",
+    "https://greet.certain.com/*",
+    "https://*.replit.dev/*",
+    "https://*.repl.co/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel/panel.html"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://54.241.143.130:5000/*",
+        "http://localhost:5001/*",
+        "http://localhost:5000/*",
+        "https://greet.certain.com/*",
+        "https://*.replit.dev/*",
+        "https://*.repl.co/*"
+      ],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Open Greet QA Runner"
+  }
+}

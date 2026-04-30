@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Greet QA Runner</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <!-- ── Header ── -->
+  <header id="header">
+    <div class="header-top">
+      <h1>Greet QA</h1>
+      <div class="header-actions">
+        <button id="btn-settings" class="icon-btn" title="Settings">&#9881;</button>
+        <button id="btn-export" class="icon-btn" title="Export Results">&#8681;</button>
+      </div>
+    </div>
+    <div class="stats-bar">
+      <span class="stat stat-total"><span id="stat-total">0</span> total</span>
+      <span class="stat stat-pass"><span id="stat-pass">0</span> pass</span>
+      <span class="stat stat-fail"><span id="stat-fail">0</span> fail</span>
+      <span class="stat stat-skip"><span id="stat-skip">0</span> skip</span>
+      <span class="stat stat-pending"><span id="stat-pending">0</span> pending</span>
+    </div>
+    <div class="progress-bar">
+      <div id="progress-fill" class="progress-fill"></div>
+    </div>
+  </header>
+
+  <!-- ── Settings Panel (hidden by default) ── -->
+  <div id="settings-panel" class="panel hidden">
+    <h2>Configuration</h2>
+    <div class="form-group">
+      <label for="cfg-baseUrl">Base URL</label>
+      <input type="text" id="cfg-baseUrl" placeholder="http://54.241.143.130:5000">
+    </div>
+    <div class="form-group">
+      <label for="cfg-email">Super Admin Email</label>
+      <input type="text" id="cfg-email" placeholder="admin@example.com">
+    </div>
+    <div class="form-group">
+      <label for="cfg-phone">Super Admin Phone</label>
+      <input type="text" id="cfg-phone" placeholder="+15551234567">
+    </div>
+    <div class="form-group">
+      <label for="cfg-customerId">Customer ID</label>
+      <input type="text" id="cfg-customerId" placeholder="1">
+    </div>
+    <div class="form-group">
+      <label for="cfg-eventId">Event ID</label>
+      <input type="text" id="cfg-eventId" placeholder="1">
+    </div>
+    <div class="form-group">
+      <label for="cfg-attendeeName">Test Attendee Name</label>
+      <input type="text" id="cfg-attendeeName" placeholder="John Smith">
+    </div>
+    <div class="form-group">
+      <label for="cfg-kioskPin">Kiosk Exit PIN</label>
+      <input type="text" id="cfg-kioskPin" placeholder="1234">
+    </div>
+    <div class="form-group">
+      <label class="checkbox-label">
+        <input type="checkbox" id="cfg-skipAuth" checked>
+        Assume already logged in (skip auth tests)
+      </label>
+    </div>
+    <div class="button-row">
+      <button id="btn-save-config" class="btn btn-primary">Save</button>
+      <button id="btn-close-settings" class="btn btn-ghost">Close</button>
+    </div>
+  </div>
+
+  <!-- ── Controls ── -->
+  <div id="controls">
+    <div class="control-row">
+      <select id="filter-section">
+        <option value="all">All Sections</option>
+      </select>
+      <select id="filter-tag">
+        <option value="all">All Tags</option>
+        <option value="smoke">Smoke Tests</option>
+        <option value="critical">Critical</option>
+        <option value="auth">Auth</option>
+        <option value="kiosk">Kiosk</option>
+        <option value="checkin">Check-in</option>
+        <option value="badge">Badge</option>
+        <option value="security">Security</option>
+      </select>
+      <select id="filter-status">
+        <option value="all">All Status</option>
+        <option value="pending">Pending</option>
+        <option value="pass">Pass</option>
+        <option value="fail">Fail</option>
+        <option value="skip">Skip</option>
+      </select>
+    </div>
+    <div class="control-row">
+      <button id="btn-run-smoke" class="btn btn-primary">Run Smoke Tests</button>
+      <button id="btn-run-section" class="btn btn-secondary">Run Section</button>
+      <button id="btn-reset" class="btn btn-ghost">Reset All</button>
+    </div>
+  </div>
+
+  <!-- ── Test List ── -->
+  <div id="test-list"></div>
+
+  <!-- ── Toast ── -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="panel.js"></script>
+</body>
+</html>
