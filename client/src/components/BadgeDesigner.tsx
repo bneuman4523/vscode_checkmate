@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { BadgeTemplate } from "@shared/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,7 @@ interface ImageElement {
 interface BadgeDesignerProps {
   templateId?: string;
   customerId?: string;
+  eventId?: string; // When provided, fetches dynamic merge fields from synced questions
   onSave?: (template: Partial<BadgeTemplate>) => void;
   onCancel?: () => void;
   initialData?: any;
@@ -98,7 +100,7 @@ const QUICK_START_PRESETS = [
   { value: "cr80", label: 'ID Card — CR-80 (3.375" × 2.125")', description: "Standard PVC ID card (credit card size)", width: 3.375, height: 2.125 },
 ];
 
-function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialData, isSaving }: BadgeDesignerProps) {
+function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel, initialData, isSaving }: BadgeDesignerProps) {
   const fontContext = useFontsOptional();
   const { trackStart, trackComplete, trackAbandon } = useBehaviorTracking();
   const [name, setName] = useState(initialData?.name || "VIP Badge");
@@ -205,20 +207,35 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
     }
   };
 
-  const availableFields = [
-    { value: "fullName", label: "Full Name" },
-    { value: "firstName", label: "First Name" },
-    { value: "lastName", label: "Last Name" },
-    { value: "email", label: "Email" },
-    { value: "company", label: "Company" },
-    { value: "title", label: "Job Title" },
-    { value: "participantType", label: "Attendee Type" },
-    { value: "externalId", label: "Reg Code" },
-    { value: "orderCode", label: "Order Code" },
-    { value: "customField_1", label: "Custom Field 1" },
-    { value: "customField_2", label: "Custom Field 2" },
-    { value: "customField_3", label: "Custom Field 3" },
-  ];
+  // Dynamic merge fields — fetches synced question fields when eventId is available
+  const { data: dynamicMergeFields } = useQuery<Array<{ value: string; label: string; source: string }>>({
+    queryKey: ["/api/events", eventId, "available-merge-fields"],
+    queryFn: async () => {
+      if (!eventId) return [];
+      const res = await fetch(`/api/events/${eventId}/available-merge-fields`, { credentials: 'include' });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!eventId,
+    staleTime: 60 * 1000,
+  });
+
+  const availableFields = dynamicMergeFields && dynamicMergeFields.length > 0
+    ? dynamicMergeFields.map(f => ({ value: f.value, label: f.label }))
+    : [
+        { value: "fullName", label: "Full Name" },
+        { value: "firstName", label: "First Name" },
+        { value: "lastName", label: "Last Name" },
+        { value: "email", label: "Email" },
+        { value: "company", label: "Company" },
+        { value: "title", label: "Job Title" },
+        { value: "participantType", label: "Attendee Type" },
+        { value: "externalId", label: "Reg Code" },
+        { value: "orderCode", label: "Order Code" },
+        { value: "customField_1", label: "Custom Field 1" },
+        { value: "customField_2", label: "Custom Field 2" },
+        { value: "customField_3", label: "Custom Field 3" },
+      ];
 
   const qrEmbedFields = [
     { value: "externalId", label: "Registration Code" },

@@ -1671,6 +1671,79 @@ export function registerTempStaffRoutes(app: Express): void {
     }
   });
 
+  // Temp staff synced questions (displayOnStaffEdit=true only)
+  app.get("/api/staff/synced-questions", staffAuth, async (req: StaffRequest, res) => {
+    try {
+      const event = req.staffEvent!;
+      const questions = await storage.getSyncedQuestions(event.customerId, event.id);
+      res.json(questions.filter(q => q.displayOnStaffEdit));
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching staff synced questions");
+      res.status(500).json({ error: "Failed to fetch synced questions" });
+    }
+  });
+
+  // Temp staff question responses for an attendee
+  app.get("/api/staff/attendees/:attendeeId/question-responses", staffAuth, async (req: StaffRequest, res) => {
+    try {
+      const responses = await storage.getAttendeeQuestionResponses(req.params.attendeeId);
+      res.json(responses);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching staff question responses");
+      res.status(500).json({ error: "Failed to fetch question responses" });
+    }
+  });
+
+  // Temp staff bulk update question responses (readOnly enforced)
+  app.patch("/api/staff/attendees/:attendeeId/question-responses", staffAuth, async (req: StaffRequest, res) => {
+    try {
+      const session = req.staffSession!;
+      const event = req.staffEvent!;
+      const { responses } = req.body; // Array of { questionId, responseValue, responseValues? }
+      if (!Array.isArray(responses)) return res.status(400).json({ error: "responses array required" });
+
+      // Load questions to enforce readOnly
+      const questions = await storage.getSyncedQuestions(event.customerId, event.id);
+      const editableIds = new Set(questions.filter(q => q.displayOnStaffEdit && !q.readOnly).map(q => q.id));
+
+      const results = [];
+      const mergeFieldUpdates: Record<string, string> = {};
+
+      for (const r of responses) {
+        if (!editableIds.has(r.questionId)) continue; // Skip readOnly questions
+        const result = await storage.upsertAttendeeQuestionResponse({
+          attendeeId: req.params.attendeeId,
+          questionId: r.questionId,
+          responseValue: r.responseValue || null,
+          responseValues: r.responseValues || null,
+          editedLocally: true,
+          editedBy: `staff:${session.staffName}`,
+          editedAt: new Date(),
+        });
+        results.push(result);
+
+        const question = questions.find(q => q.id === r.questionId);
+        if (question && r.responseValue) {
+          mergeFieldUpdates[question.mergeFieldKey] = r.responseValue;
+        }
+      }
+
+      // Rebuild customFields
+      if (Object.keys(mergeFieldUpdates).length > 0) {
+        const attendee = await storage.getAttendee(req.params.attendeeId);
+        if (attendee) {
+          const updatedFields = { ...(attendee.customFields || {}), ...mergeFieldUpdates };
+          await storage.updateAttendee(attendee.id, { customFields: updatedFields });
+        }
+      }
+
+      res.json({ success: true, updated: results.length });
+    } catch (error) {
+      logger.error({ err: error }, "Error updating staff question responses");
+      res.status(500).json({ error: "Failed to update question responses" });
+    }
+  });
+
   // Temp staff test printer connection
   app.post("/api/staff/test-printer", staffAuth, async (req: StaffRequest, res) => {
     try {

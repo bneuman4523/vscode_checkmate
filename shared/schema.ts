@@ -420,6 +420,8 @@ export const events = pgTable("events", {
     revertStatus?: string; // Status sent on revert (default from integration: "Registered")
     walkinStatus?: string; // Status for walk-in registrations (default from integration: "Checked In")
     walkinSource?: string; // Source label for walk-ins (default from integration: "Greet")
+    // Synced question settings
+    syncQuestionResponses?: boolean; // Default true. When false, check-in sync-back skips question responses entirely.
   }>(),
   kioskPin: text("kiosk_pin"),
   timezone: text("timezone"),
@@ -1525,6 +1527,76 @@ export const insertAttendeeSignatureSchema = createInsertSchema(attendeeSignatur
 });
 export type InsertAttendeeSignature = z.infer<typeof insertAttendeeSignatureSchema>;
 export type AttendeeSignature = typeof attendeeSignatures.$inferSelect;
+
+// Synced Questions — question definitions pulled from Certain's ProfileQuestion + RegistrationQuestion APIs
+// Questions tagged "checkmate" or "greet" are synced during event discovery.
+// TODO: Future — support manual question creation (no integration) with questionSource='manual' and no externalQuestionId.
+export const syncedQuestions = pgTable("synced_questions", {
+  id: text("id").primaryKey(),
+  customerId: text("customer_id").notNull().references(() => customers.id, { onDelete: "cascade" }),
+  eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }), // NULL for profile questions (account-wide)
+  questionSource: text("question_source").notNull().$type<"profile" | "registration">(),
+  questionCode: text("question_code").notNull(), // Unique key from Certain
+  questionName: text("question_name").notNull(), // Human-readable name
+  questionLabel: text("question_label"), // Display label (may differ from name)
+  questionType: text("question_type").notNull().$type<"text" | "single_choice" | "multiple_choice" | "date" | "number">(),
+  options: jsonb("options").$type<Array<{ answerCode: string; answerName: string; answerLabel?: string }>>(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  required: boolean("required").notNull().default(false),
+  // Auto-generated merge field key for badge designer (e.g., "cq_dietary_restrictions")
+  mergeFieldKey: text("merge_field_key").notNull(),
+  // Display/config flags — admin-editable per question
+  displayOnBadge: boolean("display_on_badge").notNull().default(false),
+  displayOnStaffEdit: boolean("display_on_staff_edit").notNull().default(true),
+  displayOnAdminEdit: boolean("display_on_admin_edit").notNull().default(true),
+  readOnly: boolean("read_only").notNull().default(false),
+  syncResponseBack: boolean("sync_response_back").notNull().default(false),
+  // External metadata
+  externalQuestionId: text("external_question_id"),
+  tags: jsonb("tags").$type<Array<{ tagId?: string; name: string; label?: string }>>(),
+  lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  customerIdx: index("synced_questions_customer_idx").on(table.customerId),
+  eventIdx: index("synced_questions_event_idx").on(table.eventId),
+  codeIdx: index("synced_questions_code_idx").on(table.customerId, table.questionCode),
+}));
+
+export const insertSyncedQuestionSchema = createInsertSchema(syncedQuestions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  lastSyncedAt: true,
+});
+export type InsertSyncedQuestion = z.infer<typeof insertSyncedQuestionSchema>;
+export type SyncedQuestion = typeof syncedQuestions.$inferSelect;
+
+// Attendee Question Responses — answers to synced questions, per attendee
+export const attendeeQuestionResponses = pgTable("attendee_question_responses", {
+  id: text("id").primaryKey(),
+  attendeeId: text("attendee_id").notNull().references(() => attendees.id, { onDelete: "cascade" }),
+  questionId: text("question_id").notNull().references(() => syncedQuestions.id, { onDelete: "cascade" }),
+  responseValue: text("response_value"), // Scalar answer (text, single_choice, date, number)
+  responseValues: jsonb("response_values").$type<string[]>(), // Array for multiple_choice
+  // Track local edits — sync won't overwrite if editedLocally=true
+  editedLocally: boolean("edited_locally").notNull().default(false),
+  editedBy: text("edited_by"), // User ID or "staff:{staffName}"
+  editedAt: timestamp("edited_at"),
+  lastSyncedAt: timestamp("last_synced_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  attendeeIdx: index("attendee_qr_attendee_idx").on(table.attendeeId),
+  questionIdx: index("attendee_qr_question_idx").on(table.questionId),
+  uniqueResponse: index("attendee_qr_unique_idx").on(table.attendeeId, table.questionId),
+}));
+
+export const insertAttendeeQuestionResponseSchema = createInsertSchema(attendeeQuestionResponses).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertAttendeeQuestionResponse = z.infer<typeof insertAttendeeQuestionResponseSchema>;
+export type AttendeeQuestionResponse = typeof attendeeQuestionResponses.$inferSelect;
 
 // Password Reset Tokens (for email-based password setup)
 export const passwordResetTokens = pgTable("password_reset_tokens", {

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -28,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CheckCircle, Send, Mail, Printer } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Attendee } from "@shared/schema";
 import type { AttendeeFormValues } from "./useAttendeeMutations";
 
@@ -52,6 +54,7 @@ interface AttendeeFormDialogProps {
   attendeeTypes: string[];
   isPending: boolean;
   onSubmit: (data: AttendeeFormValues) => void;
+  eventId?: string;
 }
 
 export function AttendeeFormDialog({
@@ -62,7 +65,60 @@ export function AttendeeFormDialog({
   attendeeTypes,
   isPending,
   onSubmit,
+  eventId,
 }: AttendeeFormDialogProps) {
+  const queryClient = useQueryClient();
+
+  // Fetch synced questions for this event
+  const { data: syncedQuestions } = useQuery<any[]>({
+    queryKey: ["/api/events", eventId, "synced-questions"],
+    queryFn: async () => {
+      if (!eventId) return [];
+      const res = await fetch(`/api/events/${eventId}/synced-questions`, { credentials: 'include' });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!eventId && mode === 'edit' && open,
+    staleTime: 30 * 1000,
+  });
+
+  // Fetch question responses for this attendee
+  const { data: questionResponses } = useQuery<any[]>({
+    queryKey: ["/api/events", eventId, "attendees", attendee?.id, "question-responses"],
+    queryFn: async () => {
+      if (!eventId || !attendee?.id) return [];
+      const res = await fetch(`/api/events/${eventId}/attendees/${attendee.id}/question-responses`, { credentials: 'include' });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!eventId && !!attendee?.id && mode === 'edit' && open,
+    staleTime: 30 * 1000,
+  });
+
+  // Track local question response edits
+  const [editedResponses, setEditedResponses] = useState<Record<string, string>>({});
+
+  // Bulk save question responses
+  const saveResponsesMutation = useMutation({
+    mutationFn: async () => {
+      if (!eventId || !attendee?.id || Object.keys(editedResponses).length === 0) return;
+      const responses = Object.entries(editedResponses).map(([questionId, responseValue]) => ({
+        questionId,
+        responseValue,
+      }));
+      const res = await fetch(`/api/events/${eventId}/attendees/${attendee.id}/question-responses/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ responses }),
+      });
+      if (!res.ok) throw new Error('Failed to save question responses');
+    },
+    onSuccess: () => {
+      setEditedResponses({});
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "attendees", attendee?.id, "question-responses"] });
+    },
+  });
   const form = useForm<AttendeeFormValues>({
     resolver: zodResolver(attendeeFormSchema),
     defaultValues: {
@@ -217,6 +273,71 @@ export function AttendeeFormDialog({
                         <span className="font-medium">{key}:</span> {value}
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+              {/* Synced Questions from Certain */}
+              {syncedQuestions && syncedQuestions.filter(q => q.displayOnAdminEdit).length > 0 && (
+                <div className="col-span-2 border-t pt-3 mt-1">
+                  <span className="text-muted-foreground text-sm font-medium">Synced Questions</span>
+                  <div className="mt-2 space-y-3">
+                    {syncedQuestions.filter(q => q.displayOnAdminEdit).map((question: any) => {
+                      const existing = questionResponses?.find((r: any) => r.questionId === question.id);
+                      const currentValue = editedResponses[question.id] ?? existing?.responseValue ?? '';
+                      const isEdited = question.id in editedResponses;
+
+                      return (
+                        <div key={question.id} className="space-y-1">
+                          <label className="text-xs font-medium flex items-center gap-1.5">
+                            {question.questionLabel || question.questionName}
+                            {question.questionSource === 'profile' && (
+                              <Badge variant="outline" className="text-[9px] py-0 px-1">Profile</Badge>
+                            )}
+                            {question.readOnly && (
+                              <Badge variant="secondary" className="text-[9px] py-0 px-1">Read-only</Badge>
+                            )}
+                          </label>
+                          {question.readOnly ? (
+                            <p className="text-xs text-muted-foreground">{currentValue || '—'}</p>
+                          ) : question.questionType === 'single_choice' && question.options?.length > 0 ? (
+                            <Select
+                              value={currentValue}
+                              onValueChange={(v) => setEditedResponses(prev => ({ ...prev, [question.id]: v }))}
+                            >
+                              <SelectTrigger className="h-8 text-xs">
+                                <SelectValue placeholder="Select..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {question.options.map((opt: any) => (
+                                  <SelectItem key={opt.answerCode} value={opt.answerName || opt.answerCode}>
+                                    {opt.answerLabel || opt.answerName}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Input
+                              className="h-8 text-xs"
+                              value={currentValue}
+                              onChange={(e) => setEditedResponses(prev => ({ ...prev, [question.id]: e.target.value }))}
+                              placeholder={`Enter ${question.questionName}...`}
+                            />
+                          )}
+                        </div>
+                      );
+                    })}
+                    {Object.keys(editedResponses).length > 0 && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => saveResponsesMutation.mutate()}
+                        disabled={saveResponsesMutation.isPending}
+                        className="text-xs"
+                      >
+                        {saveResponsesMutation.isPending ? 'Saving...' : 'Save Question Responses'}
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}

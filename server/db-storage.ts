@@ -43,6 +43,8 @@ import {
   type AdminAuditLog, type InsertAdminAuditLog,
   type FeatureFlag, type InsertFeatureFlag,
   type DataRetentionPolicy, type DataRetentionLog, type InsertDataRetentionLog,
+  type SyncedQuestion, type InsertSyncedQuestion,
+  type AttendeeQuestionResponse, type InsertAttendeeQuestionResponse,
 } from "@shared/schema";
 import { IStorage } from "./storage";
 import { randomUUID, randomBytes } from "crypto";
@@ -1368,6 +1370,179 @@ export class DbStorage implements IStorage {
     const result = await db.delete(schema.attendeeSignatures)
       .where(and(eq(schema.attendeeSignatures.attendeeId, attendeeId), eq(schema.attendeeSignatures.eventId, eventId)));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  // Synced Questions
+  async getSyncedQuestions(customerId: string, eventId?: string): Promise<SyncedQuestion[]> {
+    if (eventId) {
+      // Return both profile questions (eventId=null) and registration questions for this event
+      return db.select().from(schema.syncedQuestions)
+        .where(and(
+          eq(schema.syncedQuestions.customerId, customerId),
+          or(isNull(schema.syncedQuestions.eventId), eq(schema.syncedQuestions.eventId, eventId))
+        ))
+        .orderBy(asc(schema.syncedQuestions.sortOrder));
+    }
+    return db.select().from(schema.syncedQuestions)
+      .where(eq(schema.syncedQuestions.customerId, customerId))
+      .orderBy(asc(schema.syncedQuestions.sortOrder));
+  }
+
+  async getSyncedQuestion(id: string): Promise<SyncedQuestion | undefined> {
+    const [question] = await db.select().from(schema.syncedQuestions)
+      .where(eq(schema.syncedQuestions.id, id)).limit(1);
+    return question;
+  }
+
+  async upsertSyncedQuestion(question: InsertSyncedQuestion & { id?: string }): Promise<SyncedQuestion> {
+    // Find existing by customerId + questionCode + eventId
+    const conditions = [
+      eq(schema.syncedQuestions.customerId, question.customerId),
+      eq(schema.syncedQuestions.questionCode, question.questionCode),
+    ];
+    if (question.eventId) {
+      conditions.push(eq(schema.syncedQuestions.eventId, question.eventId));
+    } else {
+      conditions.push(isNull(schema.syncedQuestions.eventId));
+    }
+
+    const [existing] = await db.select().from(schema.syncedQuestions)
+      .where(and(...conditions)).limit(1);
+
+    if (existing) {
+      // Update definition fields but preserve admin-configured flags
+      const [updated] = await db.update(schema.syncedQuestions)
+        .set({
+          questionName: question.questionName,
+          questionLabel: question.questionLabel,
+          questionType: question.questionType,
+          options: question.options,
+          sortOrder: question.sortOrder,
+          required: question.required,
+          externalQuestionId: question.externalQuestionId,
+          tags: question.tags,
+          mergeFieldKey: question.mergeFieldKey,
+          lastSyncedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.syncedQuestions.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const id = question.id || generateId('sq');
+    const [created] = await db.insert(schema.syncedQuestions)
+      .values({ ...question, id })
+      .returning();
+    return created;
+  }
+
+  async updateSyncedQuestion(id: string, updates: Partial<InsertSyncedQuestion>): Promise<SyncedQuestion | undefined> {
+    const [updated] = await db.update(schema.syncedQuestions)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(schema.syncedQuestions.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteSyncedQuestion(id: string): Promise<boolean> {
+    const result = await db.delete(schema.syncedQuestions)
+      .where(eq(schema.syncedQuestions.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async deleteSyncedQuestionsNotInCodes(customerId: string, eventId: string | null, questionSource: string, keepCodes: string[]): Promise<number> {
+    const conditions = [
+      eq(schema.syncedQuestions.customerId, customerId),
+      eq(schema.syncedQuestions.questionSource, questionSource as any),
+    ];
+    if (eventId) {
+      conditions.push(eq(schema.syncedQuestions.eventId, eventId));
+    } else {
+      conditions.push(isNull(schema.syncedQuestions.eventId));
+    }
+
+    // If keepCodes is empty, delete all for this scope
+    if (keepCodes.length === 0) {
+      const result = await db.delete(schema.syncedQuestions).where(and(...conditions));
+      return result.rowCount ?? 0;
+    }
+
+    // Delete questions whose code is NOT in keepCodes
+    const allQuestions = await db.select({ id: schema.syncedQuestions.id, questionCode: schema.syncedQuestions.questionCode })
+      .from(schema.syncedQuestions)
+      .where(and(...conditions));
+
+    const toDelete = allQuestions.filter(q => !keepCodes.includes(q.questionCode));
+    let deleted = 0;
+    for (const q of toDelete) {
+      const result = await db.delete(schema.syncedQuestions).where(eq(schema.syncedQuestions.id, q.id));
+      deleted += result.rowCount ?? 0;
+    }
+    return deleted;
+  }
+
+  // Attendee Question Responses
+  async getAttendeeQuestionResponses(attendeeId: string): Promise<AttendeeQuestionResponse[]> {
+    return db.select().from(schema.attendeeQuestionResponses)
+      .where(eq(schema.attendeeQuestionResponses.attendeeId, attendeeId));
+  }
+
+  async getAttendeeQuestionResponsesByEvent(eventId: string): Promise<AttendeeQuestionResponse[]> {
+    // Get all questions for this event (including profile questions)
+    const questions = await this.getSyncedQuestions(
+      // Need to get customerId from event first
+      (await db.select({ customerId: schema.events.customerId }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1))[0]?.customerId || '',
+      eventId
+    );
+    if (questions.length === 0) return [];
+
+    const questionIds = questions.map(q => q.id);
+    return db.select().from(schema.attendeeQuestionResponses)
+      .where(inArray(schema.attendeeQuestionResponses.questionId, questionIds));
+  }
+
+  async upsertAttendeeQuestionResponse(response: InsertAttendeeQuestionResponse & { id?: string }): Promise<AttendeeQuestionResponse> {
+    // Find existing by attendeeId + questionId
+    const [existing] = await db.select().from(schema.attendeeQuestionResponses)
+      .where(and(
+        eq(schema.attendeeQuestionResponses.attendeeId, response.attendeeId),
+        eq(schema.attendeeQuestionResponses.questionId, response.questionId),
+      ))
+      .limit(1);
+
+    if (existing) {
+      // Don't overwrite local edits during sync
+      if (existing.editedLocally && !response.editedLocally) {
+        return existing;
+      }
+      const [updated] = await db.update(schema.attendeeQuestionResponses)
+        .set({
+          responseValue: response.responseValue,
+          responseValues: response.responseValues,
+          editedLocally: response.editedLocally ?? existing.editedLocally,
+          editedBy: response.editedBy ?? existing.editedBy,
+          editedAt: response.editedAt ?? existing.editedAt,
+          lastSyncedAt: response.lastSyncedAt ?? new Date(),
+        })
+        .where(eq(schema.attendeeQuestionResponses.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const id = response.id || generateId('aqr');
+    const [created] = await db.insert(schema.attendeeQuestionResponses)
+      .values({ ...response, id })
+      .returning();
+    return created;
+  }
+
+  async updateAttendeeQuestionResponse(id: string, updates: Partial<InsertAttendeeQuestionResponse>): Promise<AttendeeQuestionResponse | undefined> {
+    const [updated] = await db.update(schema.attendeeQuestionResponses)
+      .set(updates)
+      .where(eq(schema.attendeeQuestionResponses.id, id))
+      .returning();
+    return updated;
   }
 
   // Event Sync States

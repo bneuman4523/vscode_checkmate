@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import QRCode from "qrcode";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -122,6 +122,149 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function SyncedQuestionsConfig({ eventId }: { eventId: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const { data: questions, isLoading } = useQuery<any[]>({
+    queryKey: ["/api/events", eventId, "synced-questions"],
+    queryFn: async () => {
+      const res = await fetch(`/api/events/${eventId}/synced-questions`, { credentials: 'include' });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!eventId,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ questionId, updates }: { questionId: string; updates: Record<string, boolean | number> }) => {
+      const res = await fetch(`/api/events/${eventId}/synced-questions/${questionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(updates),
+      });
+      if (!res.ok) throw new Error('Failed to update question');
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/events", eventId, "synced-questions"] });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update question settings", variant: "destructive" });
+    },
+  });
+
+  if (isLoading) return <Skeleton className="h-48" />;
+
+  const profileQuestions = (questions || []).filter(q => q.questionSource === 'profile');
+  const registrationQuestions = (questions || []).filter(q => q.questionSource === 'registration');
+
+  if (!questions || questions.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <ListChecks className="h-4 w-4" />
+            Synced Questions
+          </CardTitle>
+          <CardDescription>
+            No questions synced yet. Questions tagged "Checkmate" or "Greet" in Certain will appear here after the next sync.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  const renderQuestionRow = (question: any) => (
+    <div key={question.id} className="flex items-center justify-between py-3 border-b last:border-0">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium truncate">{question.questionLabel || question.questionName}</span>
+          <Badge variant="outline" className="text-[9px] shrink-0">
+            {question.questionType}
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Merge field: <code className="text-[10px]">{question.mergeFieldKey}</code>
+        </p>
+      </div>
+      <div className="flex items-center gap-4 shrink-0 ml-4">
+        <div className="flex items-center gap-1.5">
+          <Switch
+            checked={question.displayOnBadge}
+            onCheckedChange={(v) => updateMutation.mutate({ questionId: question.id, updates: { displayOnBadge: v } })}
+            className="scale-75"
+          />
+          <span className="text-[10px] text-muted-foreground w-10">Badge</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Switch
+            checked={question.displayOnStaffEdit}
+            onCheckedChange={(v) => updateMutation.mutate({ questionId: question.id, updates: { displayOnStaffEdit: v } })}
+            className="scale-75"
+          />
+          <span className="text-[10px] text-muted-foreground w-8">Staff</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Switch
+            checked={question.readOnly}
+            onCheckedChange={(v) => updateMutation.mutate({ questionId: question.id, updates: { readOnly: v } })}
+            className="scale-75"
+          />
+          <span className="text-[10px] text-muted-foreground w-14">Read-only</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Switch
+            checked={question.syncResponseBack}
+            onCheckedChange={(v) => updateMutation.mutate({ questionId: question.id, updates: { syncResponseBack: v } })}
+            className="scale-75"
+          />
+          <span className="text-[10px] text-muted-foreground w-14">Sync back</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {profileQuestions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ListChecks className="h-4 w-4" />
+              Profile Questions
+            </CardTitle>
+            <CardDescription>
+              Account-wide questions from Certain tagged "Checkmate" or "Greet". These apply to all events.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {profileQuestions.map(renderQuestionRow)}
+          </CardContent>
+        </Card>
+      )}
+
+      {registrationQuestions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ListChecks className="h-4 w-4" />
+              Registration Questions
+            </CardTitle>
+            <CardDescription>
+              Event-specific questions from Certain tagged "Checkmate" or "Greet".
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {registrationQuestions.map(renderQuestionRow)}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
 }
 
 export default function EventSettings({ eventId }: EventSettingsProps) {
@@ -802,6 +945,7 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
     { id: "notifications", label: "Notifications", icon: Bell, status: "configured" },
     { id: "branding", label: "Kiosk Branding", icon: Palette, status: brandingOverrideEnabled ? "configured" : "needs-setup" },
     { id: "qrcode", label: "QR Code", icon: QrCode, status: qrOverrideEnabled ? "configured" : "needs-setup" },
+    { id: "questions", label: "Synced Questions", icon: ListChecks, status: "configured" },
     { id: "danger", label: "Danger Zone", icon: Trash2, status: "danger" },
   ];
 
@@ -1924,6 +2068,8 @@ export default function EventSettings({ eventId }: EventSettingsProps) {
             </CardContent>
           </Card>
         </div>}
+
+        {activeSection === "questions" && <SyncedQuestionsConfig eventId={eventId} />}
 
         {activeSection === "danger" && <div>
           <Card className="border-destructive/50">

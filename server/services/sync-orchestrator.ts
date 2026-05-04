@@ -1025,13 +1025,13 @@ class SyncOrchestrator {
     };
   }
 
-  private hasGreetTag(rawEvent: any): boolean {
-    let tags = rawEvent?.tags?.tag;
-    if (!tags && Array.isArray(rawEvent?.tags)) {
-      tags = rawEvent.tags;
+  private hasGreetTag(rawItem: any): boolean {
+    let tags = rawItem?.tags?.tag;
+    if (!tags && Array.isArray(rawItem?.tags)) {
+      tags = rawItem.tags;
     }
-    if (!tags && rawEvent?.tag) {
-      tags = Array.isArray(rawEvent.tag) ? rawEvent.tag : [rawEvent.tag];
+    if (!tags && rawItem?.tag) {
+      tags = Array.isArray(rawItem.tag) ? rawItem.tag : [rawItem.tag];
     }
     if (tags && !Array.isArray(tags)) {
       tags = [tags];
@@ -1039,8 +1039,265 @@ class SyncOrchestrator {
     if (!Array.isArray(tags)) return false;
     return tags.some((t: any) => {
       const name = typeof t === 'string' ? t : t?.name;
-      return typeof name === 'string' && name.toLowerCase() === 'checkmate';
+      const label = typeof t === 'object' ? t?.label : undefined;
+      const matchName = typeof name === 'string' && /^(checkmate|greet)$/i.test(name);
+      const matchLabel = typeof label === 'string' && /^(checkmate|greet)$/i.test(label);
+      return matchName || matchLabel;
     });
+  }
+
+  /**
+   * Generate a merge field key from a question name.
+   * e.g., "Dietary Restrictions" → "cq_dietary_restrictions"
+   */
+  private generateMergeFieldKey(questionName: string): string {
+    const sanitized = questionName
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, '_')
+      .substring(0, 50);
+    return `cq_${sanitized}`;
+  }
+
+  /**
+   * Map Certain's question type to our enum.
+   */
+  private mapQuestionType(certainType: string): 'text' | 'single_choice' | 'multiple_choice' | 'date' | 'number' {
+    const t = (certainType || '').toLowerCase();
+    if (t.includes('radio') || t.includes('dropdown') || t.includes('select') || t === 'single_choice') return 'single_choice';
+    if (t.includes('check') || t.includes('multi') || t === 'multiple_choice') return 'multiple_choice';
+    if (t.includes('date')) return 'date';
+    if (t.includes('number') || t.includes('numeric') || t.includes('integer')) return 'number';
+    return 'text';
+  }
+
+  /**
+   * Sync question definitions from Certain's ProfileQuestion and RegistrationQuestion APIs.
+   * Called at the top of syncSingleEventAttendees() before attendee fetch.
+   * Questions tagged "checkmate" or "greet" are synced; untagged questions are pruned.
+   */
+  async syncQuestionDefinitions(params: {
+    integration: any;
+    event: { id: string; accountCode: string; eventCode: string; customerId: string };
+    authHeaders: Record<string, string>;
+  }): Promise<{ profileCount: number; registrationCount: number; errors: string[] }> {
+    const { integration, event, authHeaders } = params;
+    const baseUrl = integration.baseUrl.replace(/\/$/, '');
+    const errors: string[] = [];
+    let profileCount = 0;
+    let registrationCount = 0;
+
+    // ── 1. Fetch profile questions (account-wide) ──
+    try {
+      const profileUrl = `${baseUrl}/certainExternal/service/v1/ProfileQuestion/${event.accountCode}?includeList=tags`;
+      logger.info(`[syncQuestionDefs] Fetching profile questions: ${profileUrl}`);
+
+      const profileRes = await fetch(profileUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', ...authHeaders },
+      });
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        const allQuestions = data?.questions || data?.results || (Array.isArray(data) ? data : []);
+        const taggedQuestions = allQuestions.filter((q: any) => this.hasGreetTag(q));
+
+        logger.info(`[syncQuestionDefs] Profile questions: ${allQuestions.length} total, ${taggedQuestions.length} tagged`);
+
+        const keepCodes: string[] = [];
+        for (const raw of taggedQuestions) {
+          const code = raw.questionCode || raw.code || raw.id?.toString() || '';
+          if (!code) continue;
+          keepCodes.push(code);
+
+          const answers = raw.answers || raw.answerList || [];
+          await storage.upsertSyncedQuestion({
+            customerId: event.customerId,
+            eventId: null, // Profile questions are account-wide
+            questionSource: 'profile',
+            questionCode: code,
+            questionName: raw.questionName || raw.name || code,
+            questionLabel: raw.questionLabel || raw.label || null,
+            questionType: this.mapQuestionType(raw.questionType || raw.controlType || 'text'),
+            options: answers.map((a: any) => ({
+              answerCode: a.answerCode || a.code || '',
+              answerName: a.answerName || a.name || '',
+              answerLabel: a.answerLabel || a.label || undefined,
+            })),
+            sortOrder: raw.sortOrder || raw.position || 0,
+            required: raw.required === true || raw.required === 'true',
+            mergeFieldKey: this.generateMergeFieldKey(raw.questionName || raw.name || code),
+            externalQuestionId: raw.pkQuestionId?.toString() || raw.id?.toString() || null,
+            tags: (raw.tags?.tag || raw.tags || []).map((t: any) => ({
+              tagId: t.tagId, name: typeof t === 'string' ? t : t.name, label: t.label,
+            })),
+          });
+          profileCount++;
+        }
+
+        // Prune profile questions that lost the tag
+        const pruned = await storage.deleteSyncedQuestionsNotInCodes(event.customerId, null, 'profile', keepCodes);
+        if (pruned > 0) logger.info(`[syncQuestionDefs] Pruned ${pruned} profile questions that lost tag`);
+      } else {
+        const errText = await profileRes.text().catch(() => '');
+        errors.push(`Profile questions API returned ${profileRes.status}: ${errText.substring(0, 200)}`);
+        logger.warn(`[syncQuestionDefs] Profile questions failed: ${profileRes.status}`);
+      }
+    } catch (err: any) {
+      errors.push(`Profile questions fetch error: ${err.message}`);
+      logger.error({ err }, '[syncQuestionDefs] Failed to fetch profile questions');
+    }
+
+    // ── 2. Fetch registration questions (per-event) ──
+    try {
+      const regUrl = `${baseUrl}/certainExternal/service/v1/RegistrationQuestion/${event.accountCode}/${event.eventCode}?includeList=tags`;
+      logger.info(`[syncQuestionDefs] Fetching registration questions: ${regUrl}`);
+
+      const regRes = await fetch(regUrl, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json', ...authHeaders },
+      });
+
+      if (regRes.ok) {
+        const data = await regRes.json();
+        const allQuestions = data?.questions || data?.results || (Array.isArray(data) ? data : []);
+        const taggedQuestions = allQuestions.filter((q: any) => this.hasGreetTag(q));
+
+        logger.info(`[syncQuestionDefs] Registration questions: ${allQuestions.length} total, ${taggedQuestions.length} tagged`);
+
+        const keepCodes: string[] = [];
+        for (const raw of taggedQuestions) {
+          const code = raw.questionCode || raw.code || raw.id?.toString() || '';
+          if (!code) continue;
+          keepCodes.push(code);
+
+          const answers = raw.answers || raw.answerList || [];
+          await storage.upsertSyncedQuestion({
+            customerId: event.customerId,
+            eventId: event.id,
+            questionSource: 'registration',
+            questionCode: code,
+            questionName: raw.questionName || raw.name || code,
+            questionLabel: raw.questionLabel || raw.label || null,
+            questionType: this.mapQuestionType(raw.questionType || raw.controlType || 'text'),
+            options: answers.map((a: any) => ({
+              answerCode: a.answerCode || a.code || '',
+              answerName: a.answerName || a.name || '',
+              answerLabel: a.answerLabel || a.label || undefined,
+            })),
+            sortOrder: raw.sortOrder || raw.position || 0,
+            required: raw.required === true || raw.required === 'true',
+            mergeFieldKey: this.generateMergeFieldKey(raw.questionName || raw.name || code),
+            externalQuestionId: raw.pkQuestionId?.toString() || raw.id?.toString() || null,
+            tags: (raw.tags?.tag || raw.tags || []).map((t: any) => ({
+              tagId: t.tagId, name: typeof t === 'string' ? t : t.name, label: t.label,
+            })),
+          });
+          registrationCount++;
+        }
+
+        // Prune registration questions that lost the tag
+        const pruned = await storage.deleteSyncedQuestionsNotInCodes(event.customerId, event.id, 'registration', keepCodes);
+        if (pruned > 0) logger.info(`[syncQuestionDefs] Pruned ${pruned} registration questions that lost tag`);
+      } else if (regRes.status !== 404) {
+        const errText = await regRes.text().catch(() => '');
+        errors.push(`Registration questions API returned ${regRes.status}: ${errText.substring(0, 200)}`);
+        logger.warn(`[syncQuestionDefs] Registration questions failed: ${regRes.status}`);
+      }
+    } catch (err: any) {
+      errors.push(`Registration questions fetch error: ${err.message}`);
+      logger.error({ err }, '[syncQuestionDefs] Failed to fetch registration questions');
+    }
+
+    logger.info(`[syncQuestionDefs] Complete: ${profileCount} profile, ${registrationCount} registration, ${errors.length} errors`);
+    return { profileCount, registrationCount, errors };
+  }
+
+  /**
+   * Extract question responses from raw attendee data and upsert into the database.
+   * Also rebuilds the attendee's customFields to include mergeFieldKey → responseValue entries.
+   */
+  async extractAndSaveQuestionResponses(params: {
+    rawAttendee: any;
+    attendeeId: string;
+    customerId: string;
+    eventId: string;
+    questionDefinitions: any[]; // SyncedQuestion[]
+  }): Promise<void> {
+    const { rawAttendee, attendeeId, customerId, eventId, questionDefinitions } = params;
+    if (questionDefinitions.length === 0) return;
+
+    // Certain may nest responses in various paths — try all known locations
+    const responseSources: any[] = [];
+    const profileQuestions = rawAttendee?.profileQuestions || rawAttendee?.profile?.questions || rawAttendee?.profileAnswers || [];
+    const regQuestions = rawAttendee?.registrationQuestions || rawAttendee?.questions || rawAttendee?.registrationAnswers || rawAttendee?.answers || [];
+
+    if (Array.isArray(profileQuestions)) responseSources.push(...profileQuestions);
+    if (Array.isArray(regQuestions)) responseSources.push(...regQuestions);
+
+    // Also check for flat key-value pairs in profile or registration data
+    // Some Certain responses use questionCode as direct keys
+    const flatProfile = rawAttendee?.profile || {};
+    const flatCustomData = rawAttendee?.customData || rawAttendee?.customFields || {};
+
+    const mergeFieldUpdates: Record<string, string> = {};
+
+    for (const questionDef of questionDefinitions) {
+      let responseValue: string | null = null;
+      let responseValues: string[] | null = null;
+
+      // Strategy 1: Match from response arrays by questionCode or questionName
+      const matchedResponse = responseSources.find((r: any) => {
+        const code = r.questionCode || r.code || '';
+        const name = r.questionName || r.name || '';
+        return code === questionDef.questionCode || name === questionDef.questionName;
+      });
+
+      if (matchedResponse) {
+        const answer = matchedResponse.answer || matchedResponse.answerValue || matchedResponse.value || matchedResponse.answerName || '';
+        const answers = matchedResponse.answers || matchedResponse.answerValues || matchedResponse.values;
+
+        if (Array.isArray(answers) && answers.length > 0) {
+          responseValues = answers.map((a: any) => typeof a === 'string' ? a : a.answerName || a.name || a.value || String(a));
+          responseValue = responseValues.join(', ');
+        } else if (answer) {
+          responseValue = String(answer);
+        }
+      }
+
+      // Strategy 2: Check flat keys in profile/customData
+      if (!responseValue) {
+        const flatValue = flatProfile[questionDef.questionCode] || flatCustomData[questionDef.questionCode] || flatProfile[questionDef.questionName] || flatCustomData[questionDef.questionName];
+        if (flatValue !== undefined && flatValue !== null) {
+          responseValue = String(flatValue);
+        }
+      }
+
+      // Only save if we found a value
+      if (responseValue !== null || (responseValues && responseValues.length > 0)) {
+        await storage.upsertAttendeeQuestionResponse({
+          attendeeId,
+          questionId: questionDef.id,
+          responseValue,
+          responseValues,
+          lastSyncedAt: new Date(),
+        });
+
+        // Build customFields entry for badge merge
+        if (responseValue) {
+          mergeFieldUpdates[questionDef.mergeFieldKey] = responseValue;
+        }
+      }
+    }
+
+    // Update attendee customFields with merge field entries
+    if (Object.keys(mergeFieldUpdates).length > 0) {
+      const attendee = await storage.getAttendee(attendeeId);
+      if (attendee) {
+        const updatedCustomFields = { ...(attendee.customFields || {}), ...mergeFieldUpdates };
+        await storage.updateAttendee(attendeeId, { customFields: updatedCustomFields });
+      }
+    }
   }
 
   private async autoAssignEventLocation(
@@ -2320,6 +2577,16 @@ class SyncOrchestrator {
         return { processedCount: 0, createdCount: 0, updatedCount: 0, errorCount: 0 };
       }
 
+      // Sync question definitions before processing attendees
+      try {
+        await this.syncQuestionDefinitions({ integration, event, authHeaders });
+      } catch (qErr: any) {
+        logger.warn({ err: qErr }, `[syncSingleEventAttendees] Question definition sync failed for ${event.name} — continuing with attendee sync`);
+      }
+
+      // Load question definitions once for the entire attendee batch
+      const questionDefinitions = await storage.getSyncedQuestions(event.customerId, event.id);
+
       // Resolve the endpoint template with event codes
       const endpoint = this.buildResolvedEndpoint(
         syncTemplates.attendees.endpointPath,
@@ -2392,6 +2659,21 @@ class SyncOrchestrator {
             }
             await storage.updateAttendee(existing.id, updatePayload);
 
+            // Extract question responses for existing attendee
+            if (questionDefinitions.length > 0) {
+              try {
+                await this.extractAndSaveQuestionResponses({
+                  rawAttendee,
+                  attendeeId: existing.id,
+                  customerId: event.customerId,
+                  eventId: event.id,
+                  questionDefinitions,
+                });
+              } catch (qErr: any) {
+                logger.warn({ err: qErr }, `[syncSingleEventAttendees] Question response extraction failed for attendee ${existing.id}`);
+              }
+            }
+
             // Stamp billableAt if not already set and attendee matches selected statuses
             if (!(existing as any).billableAt) {
               const selectedStatuses = evtSyncSettings?.selectedStatuses as string[] | undefined;
@@ -2430,6 +2712,21 @@ class SyncOrchestrator {
               const status = attendeeData.registrationStatusLabel || attendeeData.registrationStatus;
               if (status && selectedStatuses.includes(status)) {
                 await storage.updateAttendee(newAttendee.id, { billableAt: new Date() } as any);
+              }
+            }
+
+            // Extract question responses for new attendee
+            if (questionDefinitions.length > 0 && newAttendee) {
+              try {
+                await this.extractAndSaveQuestionResponses({
+                  rawAttendee,
+                  attendeeId: newAttendee.id,
+                  customerId: event.customerId,
+                  eventId: event.id,
+                  questionDefinitions,
+                });
+              } catch (qErr: any) {
+                logger.warn({ err: qErr }, `[syncSingleEventAttendees] Question response extraction failed for new attendee ${newAttendee.id}`);
               }
             }
             createdCount++;

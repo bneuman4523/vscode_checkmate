@@ -589,6 +589,9 @@ export default function BadgeRenderSurface({
         case 'externalId': return externalId || '';
         case 'orderCode': return orderCode || '';
         default:
+          // Try direct key lookup first (for cq_ prefixed synced question fields)
+          if (customFields?.[fieldName]) return customFields[fieldName];
+          // Legacy: strip customField_ prefix for backward compatibility
           if (fieldName.startsWith('customField_')) {
             const key = fieldName.replace('customField_', '');
             return customFields?.[key] || '';

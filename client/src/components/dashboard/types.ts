@@ -95,6 +95,7 @@ export interface Attendee {
   badgePrintedAt?: string;
   externalId?: string;
   orderCode?: string;
+  customFields?: Record<string, string>;
 }
 
 /**

@@ -4999,6 +4999,179 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =====================
+  // Synced Questions & Responses Routes
+  // =====================
+
+  // Get synced questions for an event (profile + registration)
+  app.get("/api/events/:eventId/synced-questions", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+      if (!isSuperAdmin(req.dbUser) && event.customerId !== req.dbUser?.customerId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const questions = await storage.getSyncedQuestions(event.customerId, event.id);
+      res.json(questions);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching synced questions");
+      res.status(500).json({ error: "Failed to fetch synced questions" });
+    }
+  });
+
+  // Update synced question config flags (admin only)
+  app.patch("/api/events/:eventId/synced-questions/:questionId", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+      if (!isSuperAdmin(req.dbUser) && req.dbUser?.role !== 'admin') {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const allowedFields = ['displayOnBadge', 'displayOnStaffEdit', 'displayOnAdminEdit', 'readOnly', 'syncResponseBack', 'sortOrder'];
+      const updates: any = {};
+      for (const field of allowedFields) {
+        if (req.body[field] !== undefined) updates[field] = req.body[field];
+      }
+
+      const updated = await storage.updateSyncedQuestion(req.params.questionId, updates);
+      if (!updated) return res.status(404).json({ error: "Question not found" });
+      res.json(updated);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating synced question");
+      res.status(500).json({ error: "Failed to update synced question" });
+    }
+  });
+
+  // Get available merge fields for badge designer (built-in + synced questions)
+  app.get("/api/events/:eventId/available-merge-fields", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      // Built-in fields
+      const builtIn = [
+        { value: "fullName", label: "Full Name", source: "built-in" },
+        { value: "firstName", label: "First Name", source: "built-in" },
+        { value: "lastName", label: "Last Name", source: "built-in" },
+        { value: "email", label: "Email", source: "built-in" },
+        { value: "company", label: "Company", source: "built-in" },
+        { value: "title", label: "Job Title", source: "built-in" },
+        { value: "participantType", label: "Attendee Type", source: "built-in" },
+        { value: "externalId", label: "Reg Code", source: "built-in" },
+        { value: "orderCode", label: "Order Code", source: "built-in" },
+      ];
+
+      // Dynamic fields from synced questions where displayOnBadge=true
+      const questions = await storage.getSyncedQuestions(event.customerId, event.id);
+      const dynamic = questions
+        .filter(q => q.displayOnBadge)
+        .map(q => ({
+          value: q.mergeFieldKey,
+          label: q.questionLabel || q.questionName,
+          source: q.questionSource,
+          questionId: q.id,
+        }));
+
+      // Legacy custom fields (keep for backward compatibility)
+      const legacy = [
+        { value: "customField_1", label: "Custom Field 1", source: "legacy" },
+        { value: "customField_2", label: "Custom Field 2", source: "legacy" },
+        { value: "customField_3", label: "Custom Field 3", source: "legacy" },
+      ];
+
+      res.json([...builtIn, ...dynamic, ...legacy]);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching available merge fields");
+      res.status(500).json({ error: "Failed to fetch merge fields" });
+    }
+  });
+
+  // Get question responses for a specific attendee
+  app.get("/api/events/:eventId/attendees/:attendeeId/question-responses", requireAuth, async (req, res) => {
+    try {
+      const responses = await storage.getAttendeeQuestionResponses(req.params.attendeeId);
+      res.json(responses);
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching question responses");
+      res.status(500).json({ error: "Failed to fetch question responses" });
+    }
+  });
+
+  // Update a single question response
+  app.patch("/api/events/:eventId/attendees/:attendeeId/question-responses/:responseId", requireAuth, async (req, res) => {
+    try {
+      const { responseValue, responseValues } = req.body;
+      const updated = await storage.updateAttendeeQuestionResponse(req.params.responseId, {
+        responseValue,
+        responseValues,
+        editedLocally: true,
+        editedBy: req.dbUser?.id || 'admin',
+        editedAt: new Date(),
+      });
+      if (!updated) return res.status(404).json({ error: "Response not found" });
+
+      // Rebuild customFields for this attendee
+      const question = await storage.getSyncedQuestion(updated.questionId);
+      if (question && responseValue) {
+        const attendee = await storage.getAttendee(req.params.attendeeId);
+        if (attendee) {
+          const updatedFields = { ...(attendee.customFields || {}), [question.mergeFieldKey]: responseValue };
+          await storage.updateAttendee(attendee.id, { customFields: updatedFields });
+        }
+      }
+
+      res.json(updated);
+    } catch (error) {
+      logger.error({ err: error }, "Error updating question response");
+      res.status(500).json({ error: "Failed to update question response" });
+    }
+  });
+
+  // Bulk upsert question responses for an attendee
+  app.post("/api/events/:eventId/attendees/:attendeeId/question-responses/bulk", requireAuth, async (req, res) => {
+    try {
+      const { responses } = req.body; // Array of { questionId, responseValue, responseValues? }
+      if (!Array.isArray(responses)) return res.status(400).json({ error: "responses array required" });
+
+      const results = [];
+      const mergeFieldUpdates: Record<string, string> = {};
+
+      for (const r of responses) {
+        const result = await storage.upsertAttendeeQuestionResponse({
+          attendeeId: req.params.attendeeId,
+          questionId: r.questionId,
+          responseValue: r.responseValue || null,
+          responseValues: r.responseValues || null,
+          editedLocally: true,
+          editedBy: req.dbUser?.id || 'admin',
+          editedAt: new Date(),
+        });
+        results.push(result);
+
+        // Build customFields update
+        const question = await storage.getSyncedQuestion(r.questionId);
+        if (question && r.responseValue) {
+          mergeFieldUpdates[question.mergeFieldKey] = r.responseValue;
+        }
+      }
+
+      // Rebuild customFields for this attendee
+      if (Object.keys(mergeFieldUpdates).length > 0) {
+        const attendee = await storage.getAttendee(req.params.attendeeId);
+        if (attendee) {
+          const updatedFields = { ...(attendee.customFields || {}), ...mergeFieldUpdates };
+          await storage.updateAttendee(attendee.id, { customFields: updatedFields });
+        }
+      }
+
+      res.json({ success: true, updated: results.length });
+    } catch (error) {
+      logger.error({ err: error }, "Error bulk updating question responses");
+      res.status(500).json({ error: "Failed to update question responses" });
+    }
+  });
+
+  // =====================
   // Session Routes
   // =====================
 

@@ -1116,6 +1116,7 @@ export default function EventAttendees({ eventId }: EventAttendeesProps) {
         attendeeTypes={eventAttendeeTypes}
         isPending={mutations.updateAttendeeMutation.isPending}
         onSubmit={handleEditSubmit}
+        eventId={eventId}
       />
 
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>

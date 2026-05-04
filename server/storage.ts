@@ -38,6 +38,8 @@ import {
   type AdminAuditLog, type InsertAdminAuditLog,
   type FeatureFlag, type InsertFeatureFlag,
   type DataRetentionPolicy, type DataRetentionLog, type InsertDataRetentionLog,
+  type SyncedQuestion, type InsertSyncedQuestion,
+  type AttendeeQuestionResponse, type InsertAttendeeQuestionResponse,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -307,7 +309,21 @@ export interface IStorage {
   updateAttendeeSignature(id: string, data: Partial<Pick<AttendeeSignature, 'signatureData' | 'ipAddress' | 'userAgent'>>): Promise<AttendeeSignature | undefined>;
   deleteAttendeeSignature(id: string): Promise<boolean>;
   deleteAttendeeSignaturesByAttendee(attendeeId: string, eventId: string): Promise<boolean>;
-  
+
+  // Synced Questions (from Certain profile/registration questions)
+  getSyncedQuestions(customerId: string, eventId?: string): Promise<SyncedQuestion[]>;
+  getSyncedQuestion(id: string): Promise<SyncedQuestion | undefined>;
+  upsertSyncedQuestion(question: InsertSyncedQuestion & { id?: string }): Promise<SyncedQuestion>;
+  updateSyncedQuestion(id: string, updates: Partial<InsertSyncedQuestion>): Promise<SyncedQuestion | undefined>;
+  deleteSyncedQuestion(id: string): Promise<boolean>;
+  deleteSyncedQuestionsNotInCodes(customerId: string, eventId: string | null, questionSource: string, keepCodes: string[]): Promise<number>;
+
+  // Attendee Question Responses (answers to synced questions)
+  getAttendeeQuestionResponses(attendeeId: string): Promise<AttendeeQuestionResponse[]>;
+  getAttendeeQuestionResponsesByEvent(eventId: string): Promise<AttendeeQuestionResponse[]>;
+  upsertAttendeeQuestionResponse(response: InsertAttendeeQuestionResponse & { id?: string }): Promise<AttendeeQuestionResponse>;
+  updateAttendeeQuestionResponse(id: string, updates: Partial<InsertAttendeeQuestionResponse>): Promise<AttendeeQuestionResponse | undefined>;
+
   // Event Sync States
   getEventSyncStates(eventId: string): Promise<EventSyncState[]>;
   getEventSyncState(eventId: string, dataType: string): Promise<EventSyncState | undefined>;
@@ -2842,6 +2858,99 @@ export class MemStorage implements IStorage {
       .filter(([_, s]) => s.attendeeId === attendeeId && s.eventId === eventId);
     toDelete.forEach(([id]) => this.attendeeSignatures.delete(id));
     return toDelete.length > 0;
+  }
+
+  // Synced Questions (MemStorage — in-memory only, production uses DatabaseStorage)
+  private syncedQuestionsMap = new Map<string, SyncedQuestion>();
+  private attendeeQuestionResponsesMap = new Map<string, AttendeeQuestionResponse>();
+
+  async getSyncedQuestions(customerId: string, eventId?: string): Promise<SyncedQuestion[]> {
+    return Array.from(this.syncedQuestionsMap.values()).filter(q => {
+      if (q.customerId !== customerId) return false;
+      if (eventId) return q.eventId === null || q.eventId === eventId;
+      return true;
+    });
+  }
+
+  async getSyncedQuestion(id: string): Promise<SyncedQuestion | undefined> {
+    return this.syncedQuestionsMap.get(id);
+  }
+
+  async upsertSyncedQuestion(question: InsertSyncedQuestion & { id?: string }): Promise<SyncedQuestion> {
+    const existing = Array.from(this.syncedQuestionsMap.values()).find(
+      q => q.customerId === question.customerId && q.questionCode === question.questionCode && q.eventId === (question.eventId || null)
+    );
+    if (existing) {
+      const updated = { ...existing, ...question, id: existing.id, updatedAt: new Date(), lastSyncedAt: new Date() };
+      this.syncedQuestionsMap.set(existing.id, updated);
+      return updated;
+    }
+    const id = question.id || `sq-${randomUUID().substring(0, 8)}`;
+    const sq: SyncedQuestion = {
+      ...question as any,
+      id,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      lastSyncedAt: new Date(),
+    };
+    this.syncedQuestionsMap.set(id, sq);
+    return sq;
+  }
+
+  async updateSyncedQuestion(id: string, updates: Partial<InsertSyncedQuestion>): Promise<SyncedQuestion | undefined> {
+    const existing = this.syncedQuestionsMap.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates, updatedAt: new Date() };
+    this.syncedQuestionsMap.set(id, updated);
+    return updated;
+  }
+
+  async deleteSyncedQuestion(id: string): Promise<boolean> {
+    return this.syncedQuestionsMap.delete(id);
+  }
+
+  async deleteSyncedQuestionsNotInCodes(customerId: string, eventId: string | null, questionSource: string, keepCodes: string[]): Promise<number> {
+    const toDelete = Array.from(this.syncedQuestionsMap.entries())
+      .filter(([_, q]) => q.customerId === customerId && q.eventId === eventId && q.questionSource === questionSource && !keepCodes.includes(q.questionCode));
+    toDelete.forEach(([id]) => this.syncedQuestionsMap.delete(id));
+    return toDelete.length;
+  }
+
+  async getAttendeeQuestionResponses(attendeeId: string): Promise<AttendeeQuestionResponse[]> {
+    return Array.from(this.attendeeQuestionResponsesMap.values()).filter(r => r.attendeeId === attendeeId);
+  }
+
+  async getAttendeeQuestionResponsesByEvent(eventId: string): Promise<AttendeeQuestionResponse[]> {
+    const questionIds = new Set(
+      Array.from(this.syncedQuestionsMap.values())
+        .filter(q => q.eventId === eventId || q.eventId === null)
+        .map(q => q.id)
+    );
+    return Array.from(this.attendeeQuestionResponsesMap.values()).filter(r => questionIds.has(r.questionId));
+  }
+
+  async upsertAttendeeQuestionResponse(response: InsertAttendeeQuestionResponse & { id?: string }): Promise<AttendeeQuestionResponse> {
+    const existing = Array.from(this.attendeeQuestionResponsesMap.values()).find(
+      r => r.attendeeId === response.attendeeId && r.questionId === response.questionId
+    );
+    if (existing) {
+      if (existing.editedLocally && !response.editedLocally) return existing; // Don't overwrite local edits
+      const updated = { ...existing, ...response, id: existing.id };
+      this.attendeeQuestionResponsesMap.set(existing.id, updated);
+      return updated;
+    }
+    const id = response.id || `aqr-${randomUUID().substring(0, 8)}`;
+    const aqr: AttendeeQuestionResponse = { ...response as any, id, createdAt: new Date() };
+    this.attendeeQuestionResponsesMap.set(id, aqr);
+    return aqr;
+  }
+
+  async updateAttendeeQuestionResponse(id: string, updates: Partial<InsertAttendeeQuestionResponse>): Promise<AttendeeQuestionResponse | undefined> {
+    const existing = this.attendeeQuestionResponsesMap.get(id);
+    if (!existing) return undefined;
+    const updated = { ...existing, ...updates };
+    this.attendeeQuestionResponsesMap.set(id, updated);
+    return updated;
   }
 
   // Event Sync States

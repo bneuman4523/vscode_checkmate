@@ -83,6 +83,9 @@ interface CertainCheckinEntry {
 interface CertainPayload {
   registrationStatusLabel: string;
   checkins?: CertainCheckinEntry[];
+  // Synced question responses to push back to Certain
+  profileQuestions?: Array<{ questionCode: string; answer: string }>;
+  registrationQuestions?: Array<{ questionCode: string; answer: string }>;
 }
 
 interface CertainRegistrationPayload {
@@ -172,6 +175,45 @@ class CheckinSyncService {
       dateModified: now,
       source: "Greet",
     });
+
+    // Include edited question responses if sync is enabled
+    if (eventSyncSettings?.syncQuestionResponses !== false) {
+      try {
+        const { storage } = await import('../storage');
+        const questions = await storage.getSyncedQuestions(event.customerId, event.id);
+        const syncBackQuestions = questions.filter(q => q.syncResponseBack);
+
+        if (syncBackQuestions.length > 0) {
+          const responses = await storage.getAttendeeQuestionResponses(attendee.id);
+          const editedResponses = responses.filter(r => r.editedLocally);
+
+          if (editedResponses.length > 0) {
+            const profileAnswers: Array<{ questionCode: string; answer: string }> = [];
+            const regAnswers: Array<{ questionCode: string; answer: string }> = [];
+
+            for (const resp of editedResponses) {
+              const question = syncBackQuestions.find(q => q.id === resp.questionId);
+              if (!question || !resp.responseValue) continue;
+
+              const entry = { questionCode: question.questionCode, answer: resp.responseValue };
+              if (question.questionSource === 'profile') {
+                profileAnswers.push(entry);
+              } else {
+                regAnswers.push(entry);
+              }
+            }
+
+            if (profileAnswers.length > 0) payload.profileQuestions = profileAnswers;
+            if (regAnswers.length > 0) payload.registrationQuestions = regAnswers;
+
+            logger.info(`[checkinSync] Including ${profileAnswers.length} profile + ${regAnswers.length} registration question responses for attendee ${attendee.id}`);
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ err }, `[checkinSync] Failed to load question responses for sync-back — continuing without them`);
+      }
+    }
+
     return this.sendWithRetry(payload, integration, config, attendee, event);
   }
 

@@ -1,16 +1,42 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogDescription, 
-  DialogFooter 
+import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter
 } from "@/components/ui/dialog";
 import { CheckCircle, Loader2 } from "lucide-react";
 import type { EditFormData } from "../../types";
+
+interface SyncedQuestion {
+  id: string;
+  questionName: string;
+  questionLabel?: string;
+  questionType: string;
+  questionSource: string;
+  options?: Array<{ answerCode: string; answerName: string; answerLabel?: string }>;
+  readOnly: boolean;
+  displayOnStaffEdit: boolean;
+}
+
+interface QuestionResponse {
+  id: string;
+  questionId: string;
+  responseValue: string | null;
+  responseValues: string[] | null;
+}
 
 interface EditAttendeeDialogProps {
   open: boolean;
@@ -19,14 +45,15 @@ interface EditAttendeeDialogProps {
   onFormDataChange: (data: EditFormData | ((prev: EditFormData) => EditFormData)) => void;
   isUpdating: boolean;
   onSave: () => void;
+  syncedQuestions?: SyncedQuestion[];
+  questionResponses?: QuestionResponse[];
+  questionEdits?: Record<string, string>;
+  onQuestionEdit?: (questionId: string, value: string) => void;
 }
 
 /**
- * Dialog for editing attendee badge data (name, company, title).
- * 
- * Why: Form handling logic is isolated to keep focus on the form UI.
- * The parent component manages when to show this dialog and what
- * attendee is being edited.
+ * Dialog for editing attendee badge data (name, company, title)
+ * and synced question responses when available.
  */
 export function EditAttendeeDialog({
   open,
@@ -35,7 +62,13 @@ export function EditAttendeeDialog({
   onFormDataChange,
   isUpdating,
   onSave,
+  syncedQuestions,
+  questionResponses,
+  questionEdits,
+  onQuestionEdit,
 }: EditAttendeeDialogProps) {
+  const visibleQuestions = syncedQuestions?.filter(q => q.displayOnStaffEdit) || [];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -84,6 +117,53 @@ export function EditAttendeeDialog({
               data-testid="input-edit-title"
             />
           </div>
+
+          {/* Synced Questions */}
+          {visibleQuestions.length > 0 && (
+            <div className="border-t pt-3 space-y-3">
+              <Label className="text-sm font-medium text-muted-foreground">Custom Questions</Label>
+              {visibleQuestions.map((question) => {
+                const existing = questionResponses?.find(r => r.questionId === question.id);
+                const currentValue = questionEdits?.[question.id] ?? existing?.responseValue ?? '';
+
+                return (
+                  <div key={question.id} className="space-y-1">
+                    <Label className="text-xs flex items-center gap-1.5">
+                      {question.questionLabel || question.questionName}
+                      {question.readOnly && (
+                        <Badge variant="secondary" className="text-[9px] py-0 px-1">Read-only</Badge>
+                      )}
+                    </Label>
+                    {question.readOnly ? (
+                      <p className="text-xs text-muted-foreground pl-1">{currentValue || '—'}</p>
+                    ) : question.questionType === 'single_choice' && question.options?.length ? (
+                      <Select
+                        value={currentValue}
+                        onValueChange={(v) => onQuestionEdit?.(question.id, v)}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Select..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {question.options.map((opt) => (
+                            <SelectItem key={opt.answerCode} value={opt.answerName || opt.answerCode}>
+                              {opt.answerLabel || opt.answerName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        className="h-8 text-xs"
+                        value={currentValue}
+                        onChange={(e) => onQuestionEdit?.(question.id, e.target.value)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
         <DialogFooter className="flex-col gap-2 sm:flex-row">
           <Button
