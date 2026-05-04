@@ -103,19 +103,19 @@ if [ "${SKIP_SSM:-false}" = "false" ] && command -v aws > /dev/null 2>&1; then
   if [ -z "$params" ]; then
     echo "  WARNING: No parameters found at $SSM_PREFIX"
   else
-    echo "$params" | while IFS=$(printf '\t') read -r name value; do
-      # Extract var name from path: /greet/production/DATABASE_URL → DATABASE_URL
-      var_name=$(echo "$name" | awk -F'/' '{print $NF}')
-      # Only set if not already defined (env/S3 vars take precedence)
-      eval existing=\$$var_name
-      if [ -z "$existing" ]; then
-        export "$var_name=$value"
-        echo "  Loaded: $var_name"
-      else
-        echo "  Skipped: $var_name (already set)"
-      fi
-    done
-    echo "  Secrets loaded from SSM"
+    printf '%s\n' "$params" > /tmp/ssm_params
+  while IFS=$(printf '\t') read -r name value; do
+    var_name=$(echo "$name" | awk -F'/' '{print $NF}')
+    eval existing=\$$var_name
+    if [ -z "$existing" ]; then
+      export "$var_name=$value"
+      echo "  Loaded: $var_name"
+    else
+      echo "  Skipped: $var_name (already set)"
+    fi
+  done < /tmp/ssm_params
+  rm -f /tmp/ssm_params
+  echo "  Secrets loaded from SSM"
   fi
 elif [ "${SKIP_SSM:-false}" = "false" ]; then
   echo "Step 2: SKIP — aws CLI not available"
