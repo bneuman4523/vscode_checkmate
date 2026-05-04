@@ -221,7 +221,7 @@ export const badgeTemplates = pgTable("badge_templates", {
     zIndex: number; // Layering order
   }>>().default(sql`'[]'`),
   // Two-sided foldable badge support
-  layoutMode: text("layout_mode").notNull().default("single"), // "single" | "foldable"
+  layoutMode: text("layout_mode").notNull().default("single"), // "single" | "foldable" | "dual_side_card"
   backSideMode: text("back_side_mode").notNull().default("blank"), // "duplicate-rotate" | "custom" | "blank"
   backSideMergeFields: jsonb("back_side_merge_fields").$type<Array<{
     field: string;
@@ -296,6 +296,8 @@ export const printers = pgTable("printers", {
   name: text("name").notNull(),
   // Provider type: printnode, network, zebra_browser_print, native
   provider: text("provider").notNull().default("network"),
+  // Printer category: label (thermal badge printers), card (dye-sub ID card printers like Zebra ZC300)
+  printerCategory: text("printer_category").notNull().default("label").$type<"label" | "card">(),
   // PrintNode-specific fields
   printNodePrinterId: integer("printnode_printer_id"),
   printNodeComputerId: integer("printnode_computer_id"),

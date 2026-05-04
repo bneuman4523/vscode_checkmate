@@ -393,6 +393,7 @@ class PrintOrchestrator {
   async generatePDFBlob(badgeData: BadgeData, templateConfig: any, labelRotation: 0 | 90 | 180 | 270 = 0): Promise<Blob> {
     const { width, height } = templateConfig;
     const isFoldable = templateConfig.layoutMode === 'foldable';
+    const isDualSideCard = templateConfig.layoutMode === 'dual_side_card';
     const totalHeight = isFoldable ? height * 2 : height;
 
     if (templateConfig.includeQR && !badgeData.qrCode) {
@@ -400,6 +401,65 @@ class PrintOrchestrator {
     }
 
     const dpi = 300;
+
+    if (isDualSideCard) {
+      // Dual-sided card: 2-page PDF, one page per side
+      // Card printer drivers (Zebra ZC300, etc.) treat page 1 as front, page 2 as back
+      const frontCanvas = await this.renderBadgePanelToCanvas(badgeData, templateConfig, dpi);
+      const frontImg = frontCanvas.toDataURL('image/png', 1.0);
+
+      const pdf = new jsPDF({
+        orientation: width > height ? 'landscape' : 'portrait',
+        unit: 'in',
+        format: [width, height],
+      });
+
+      // Page 1: Front
+      pdf.addImage(frontImg, 'PNG', 0, 0, width, height);
+
+      // Page 2: Back
+      const backSideMode = templateConfig.backSideMode || 'blank';
+      if (backSideMode !== 'blank') {
+        pdf.addPage([width, height], width > height ? 'landscape' : 'portrait');
+
+        if (backSideMode === 'duplicate-rotate') {
+          // Same as front, rotated 180°
+          const backCanvas = document.createElement('canvas');
+          backCanvas.width = frontCanvas.width;
+          backCanvas.height = frontCanvas.height;
+          const ctx = backCanvas.getContext('2d')!;
+          ctx.translate(backCanvas.width, backCanvas.height);
+          ctx.rotate(Math.PI);
+          ctx.drawImage(frontCanvas, 0, 0);
+          const backImg = backCanvas.toDataURL('image/png', 1.0);
+          pdf.addImage(backImg, 'PNG', 0, 0, width, height);
+        } else if (backSideMode === 'custom') {
+          // Custom back side design
+          const backConfig = {
+            ...templateConfig,
+            backgroundColor: templateConfig.backSideBackgroundColor || templateConfig.backgroundColor,
+            mergeFields: templateConfig.backSideMergeFields || [],
+            imageElements: templateConfig.backSideImageElements || [],
+            includeQR: templateConfig.backSideIncludeQR || false,
+            qrPosition: templateConfig.backSideQrPosition || 'bottom-right',
+            customQrPosition: templateConfig.backSideCustomQrPosition,
+            qrCodeConfig: templateConfig.backSideQrCodeConfig || templateConfig.qrCodeConfig,
+          };
+          let backBadgeData = { ...badgeData };
+          if (backConfig.includeQR) {
+            const backQrConfig = templateConfig.backSideQrCodeConfig || templateConfig.qrCodeConfig;
+            backBadgeData.qrCode = await this.generateQRCode(backBadgeData, { ...templateConfig, includeQR: true }, backQrConfig) || '';
+          }
+          const backCanvas = await this.renderBadgePanelToCanvas(backBadgeData, backConfig, dpi);
+          const backImg = backCanvas.toDataURL('image/png', 1.0);
+          pdf.addImage(backImg, 'PNG', 0, 0, width, height);
+        }
+      }
+
+      return pdf.output('blob');
+    }
+
+    // Foldable or single-sided
     let compositeCanvas: HTMLCanvasElement;
 
     if (isFoldable) {

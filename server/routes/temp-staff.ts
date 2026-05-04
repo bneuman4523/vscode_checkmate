@@ -1571,6 +1571,106 @@ export function registerTempStaffRoutes(app: Express): void {
     }
   });
 
+  // Temp staff card print — send PDF to card printer (Zebra ZC300, etc.)
+  // Supports PrintNode (cloud/USB) and direct network via port 9100
+  app.post("/api/staff/card-print", largeBodyParser, staffAuth, async (req: StaffRequest, res) => {
+    try {
+      const session = req.staffSession!;
+      const event = req.staffEvent!;
+      const { pdfBase64, printerIp, printNodePrinterId, port = 9100, title = "ID Card" } = req.body;
+
+      if (!pdfBase64) {
+        return res.status(400).json({ error: "pdfBase64 is required (base64-encoded PDF)" });
+      }
+
+      let printResult: { success: boolean; jobId?: any; error?: string };
+
+      if (printNodePrinterId) {
+        // Route 1: PrintNode — sends PDF through Windows driver (handles dye-sub rendering)
+        const { PrintNodeService } = await import('../services/printnode');
+        const printNode = new PrintNodeService();
+        const job = await printNode.printPdf(
+          printNodePrinterId,
+          pdfBase64,
+          title,
+          { widthInches: 3.375, heightInches: 2.125, fitToPage: true }
+        );
+        printResult = { success: true, jobId: job.id };
+
+      } else if (printerIp) {
+        // Route 2: Direct network — send raw PDF data to card printer
+        // Card printers in pass-through mode accept PDF/image on port 9100
+        const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+        if (!ipRegex.test(printerIp)) {
+          return res.status(400).json({ error: "Invalid IP address format" });
+        }
+
+        const net = await import('net');
+        const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+
+        printResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+          const client = new net.Socket();
+          client.setTimeout(15000); // 15s timeout for card print (slower than label)
+
+          client.on('connect', () => {
+            client.write(pdfBuffer, (err) => {
+              if (err) {
+                client.destroy();
+                resolve({ success: false, error: err.message });
+              } else {
+                setTimeout(() => {
+                  client.destroy();
+                  resolve({ success: true });
+                }, 1000); // Card printers need more time to buffer
+              }
+            });
+          });
+
+          client.on('timeout', () => {
+            client.destroy();
+            resolve({ success: false, error: 'Connection timed out' });
+          });
+
+          client.on('error', (err) => {
+            client.destroy();
+            resolve({ success: false, error: err.message });
+          });
+
+          client.connect(port, printerIp);
+        });
+
+      } else {
+        return res.status(400).json({ error: "Either printNodePrinterId or printerIp is required" });
+      }
+
+      if (!printResult.success) {
+        return res.status(500).json({ error: "Card print failed", details: printResult.error });
+      }
+
+      // Log the card print
+      await storage.createStaffActivityLog({
+        sessionId: session.id,
+        eventId: event.id,
+        action: 'card_print',
+        targetId: printNodePrinterId?.toString() || printerIp,
+        metadata: {
+          printerIp: printerIp || null,
+          printNodePrinterId: printNodePrinterId || null,
+          port,
+          title,
+          staffName: session.staffName,
+          pdfSize: pdfBase64.length,
+          jobId: printResult.jobId || null,
+        },
+      });
+
+      res.json({ success: true, jobId: printResult.jobId || null });
+    } catch (error) {
+      logger.error({ err: error }, "Error sending card print");
+      res.status(500).json({ error: "Card print failed" });
+    }
+  });
+
   // Temp staff test printer connection
   app.post("/api/staff/test-printer", staffAuth, async (req: StaffRequest, res) => {
     try {

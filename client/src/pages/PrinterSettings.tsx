@@ -37,6 +37,7 @@ interface PrintNodeStatus {
 const printerFormSchema = z.object({
   name: z.string().min(1, 'Printer name is required'),
   locationId: z.string().nullable().optional(),
+  printerCategory: z.enum(['label', 'card']).default('label'),
   connectionType: z.enum(['wifi', 'bluetooth', 'airprint', 'usb']),
   ipAddress: z.string().optional(),
   port: z.coerce.number().optional(),
@@ -137,6 +138,7 @@ export default function PrinterSettings() {
     defaultValues: {
       name: '',
       locationId: null,
+      printerCategory: 'label',
       connectionType: 'wifi',
       isDefault: false,
       isActive: true,
@@ -203,6 +205,7 @@ export default function PrinterSettings() {
     form.reset({
       name: printer.name,
       locationId: printer.locationId || null,
+      printerCategory: (printer as any).printerCategory || 'label',
       connectionType: printer.connectionType as any,
       ipAddress: printer.ipAddress || '',
       port: printer.port || undefined,
@@ -339,6 +342,32 @@ export default function PrinterSettings() {
                     )}
                   />
                 )}
+
+                <FormField
+                  control={form.control}
+                  name="printerCategory"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Printer Type <span className="text-destructive">*</span></FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-printer-category">
+                            <SelectValue placeholder="Select printer type" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="label">Badge / Label Printer</SelectItem>
+                          <SelectItem value="card">ID Card Printer (CR-80)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {field.value === 'label' && 'Thermal label printer (Zebra ZD621, ZD421, etc.)'}
+                        {field.value === 'card' && 'Dye-sublimation card printer (Zebra ZC300, etc.) — prints CR-80 PVC cards'}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
                 <FormField
                   control={form.control}
@@ -589,7 +618,9 @@ export default function PrinterSettings() {
                     </Button>
                   </div>
                 </div>
-                <CardDescription className="capitalize">{printer.connectionType} Connection</CardDescription>
+                <CardDescription className="capitalize">
+                  {(printer as any).printerCategory === 'card' ? 'ID Card Printer' : 'Badge Printer'} &middot; {printer.connectionType} Connection
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="space-y-2 text-sm">

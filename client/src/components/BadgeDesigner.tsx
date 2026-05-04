@@ -95,6 +95,7 @@ const QUICK_START_PRESETS = [
   { value: "landscape", label: 'Landscape (5" × 3")', description: "Wider format for more content", width: 5, height: 3 },
   { value: "nametag", label: 'Name Tag (3.5" × 2.25")', description: "Compact adhesive name tag", width: 3.5, height: 2.25 },
   { value: "large", label: 'Large (4" × 6")', description: "Full-size conference badge", width: 4, height: 6 },
+  { value: "cr80", label: 'ID Card — CR-80 (3.375" × 2.125")', description: "Standard PVC ID card (credit card size)", width: 3.375, height: 2.125 },
 ];
 
 function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialData, isSaving }: BadgeDesignerProps) {
@@ -139,7 +140,7 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
     { field: "company", label: "Company", fontSize: 14, position: { x: 20, y: 110 }, align: "left", fontWeight: "400" },
   ]);
   const [imageElements, setImageElements] = useState<ImageElement[]>(initialData?.imageElements || []);
-  const [layoutMode, setLayoutMode] = useState<'single' | 'foldable'>(initialData?.layoutMode || 'single');
+  const [layoutMode, setLayoutMode] = useState<'single' | 'foldable' | 'dual_side_card'>(initialData?.layoutMode || 'single');
   const [backSideMode, setBackSideMode] = useState<'duplicate-rotate' | 'custom' | 'blank'>(initialData?.backSideMode || 'blank');
   const [backSideMergeFields, setBackSideMergeFields] = useState<MergeField[]>(initialData?.backSideMergeFields || []);
   const [backSideImageElements, setBackSideImageElements] = useState<ImageElement[]>(initialData?.backSideImageElements || []);
@@ -317,15 +318,15 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
       watermarkOpacity,
       watermarkPosition,
       layoutMode,
-      backSideMode: layoutMode === 'foldable' ? backSideMode : 'blank',
-      backSideMergeFields: layoutMode === 'foldable' && backSideMode === 'custom' ? backSideMergeFields : [],
-      backSideImageElements: layoutMode === 'foldable' && backSideMode === 'custom' ? backSideImageElements : [],
-      backSideIncludeQR: layoutMode === 'foldable' && backSideMode === 'custom' ? backSideIncludeQR : false,
-      backSideQrPosition: layoutMode === 'foldable' && backSideMode === 'custom' ? backSideQrPosition : 'bottom-right',
-      backSideCustomQrPosition: layoutMode === 'foldable' && backSideMode === 'custom' && backSideQrPosition === 'custom' ? backSideCustomQrPosition : undefined,
-      backSideQrCodeConfig: layoutMode === 'foldable' && backSideMode === 'custom' && backSideIncludeQR ? backSideQrCodeConfig : undefined,
-      backSideBackgroundColor: layoutMode === 'foldable' ? backSideBackgroundColor : undefined,
-      backSideAgenda: layoutMode === 'foldable' && backSideMode === 'custom' ? backSideAgenda : undefined,
+      backSideMode: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') ? backSideMode : 'blank',
+      backSideMergeFields: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideMergeFields : [],
+      backSideImageElements: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideImageElements : [],
+      backSideIncludeQR: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideIncludeQR : false,
+      backSideQrPosition: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideQrPosition : 'bottom-right',
+      backSideCustomQrPosition: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' && backSideQrPosition === 'custom' ? backSideCustomQrPosition : undefined,
+      backSideQrCodeConfig: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' && backSideIncludeQR ? backSideQrCodeConfig : undefined,
+      backSideBackgroundColor: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') ? backSideBackgroundColor : undefined,
+      backSideAgenda: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideAgenda : undefined,
     };
     trackComplete("badge_designer", "save");
     onSave?.(template);
@@ -443,7 +444,7 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                 </Label>
                 <Select
                   value={layoutMode}
-                  onValueChange={(v: 'single' | 'foldable') => setLayoutMode(v)}
+                  onValueChange={(v: 'single' | 'foldable' | 'dual_side_card') => setLayoutMode(v)}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -451,14 +452,17 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                   <SelectContent>
                     <SelectItem value="single">Single-sided</SelectItem>
                     <SelectItem value="foldable">Two-sided foldable</SelectItem>
+                    <SelectItem value="dual_side_card">Dual-sided ID card</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {layoutMode === 'foldable'
                     ? `Prints at ${width}" × ${(height * 2).toFixed(1)}" with a fold line. Top half is the front, bottom half folds behind.`
+                    : layoutMode === 'dual_side_card'
+                    ? `Generates a 2-page PDF (front + back) for dual-sided card printers like the Zebra ZC300. Each side is ${width}" × ${height}".`
                     : 'Standard single-sided badge.'}
                 </p>
-                {layoutMode === 'foldable' && (
+                {(layoutMode === 'foldable' || layoutMode === 'dual_side_card') && (
                   <div className="space-y-2 mt-2">
                     <Label className="text-sm">Back Side Content</Label>
                     <Select
@@ -1265,7 +1269,7 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                 accentColor={accentColor}
                 fontFamily={fontFamily}
                 mergeFields={mergeFields}
-                panelLabel={layoutMode === 'foldable' ? 'Front Side' : undefined}
+                panelLabel={(layoutMode === 'foldable' || layoutMode === 'dual_side_card') ? 'Front Side' : undefined}
                 imageElements={imageElements}
                 includeQR={includeQR}
                 qrPosition={qrPosition}
@@ -1290,16 +1294,27 @@ function BadgeDesignerInner({ templateId, customerId, onSave, onCancel, initialD
                 watermarkPosition={watermarkPosition}
               />
 
-              {layoutMode === 'foldable' && (
+              {(layoutMode === 'foldable' || layoutMode === 'dual_side_card') && (
                 <div className="space-y-2">
-                  <div className="flex items-center gap-2 py-1">
-                    <div className="flex-1 border-t-2 border-dashed border-muted-foreground/40" />
-                    <span className="text-[10px] text-muted-foreground flex items-center gap-1 px-1">
-                      <FlipVertical className="h-2.5 w-2.5" />
-                      Fold
-                    </span>
-                    <div className="flex-1 border-t-2 border-dashed border-muted-foreground/40" />
-                  </div>
+                  {layoutMode === 'foldable' && (
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="flex-1 border-t-2 border-dashed border-muted-foreground/40" />
+                      <span className="text-[10px] text-muted-foreground flex items-center gap-1 px-1">
+                        <FlipVertical className="h-2.5 w-2.5" />
+                        Fold
+                      </span>
+                      <div className="flex-1 border-t-2 border-dashed border-muted-foreground/40" />
+                    </div>
+                  )}
+                  {layoutMode === 'dual_side_card' && (
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="flex-1 border-t border-primary/40" />
+                      <span className="text-[10px] text-primary flex items-center gap-1 px-1 font-medium">
+                        Page 2 — Card Back
+                      </span>
+                      <div className="flex-1 border-t border-primary/40" />
+                    </div>
+                  )}
                   <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
                     Back Side {backSideMode === 'duplicate-rotate' && '(Duplicate & Rotate)'}
                     {backSideMode === 'blank' && '(Blank)'}
