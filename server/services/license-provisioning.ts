@@ -26,6 +26,7 @@ const FEATURE_DEFINITIONS: FeatureDef[] = [
   { key: "security_compliance", name: "OWASP Security Compliance", description: "Rate limiting, input sanitization, timing-safe auth, and encrypted credentials", category: "administration", basic: false, premium: true },
   { key: "multi_account_access", name: "Multi-Account Access", description: "Partner role with access to multiple customer accounts", category: "administration", basic: false, premium: "coming_soon" },
   { key: "data_privacy_controls", name: "GDPR/CCPA Data Privacy", description: "Automated data retention policies and right-to-deletion support", category: "administration", basic: false, premium: "coming_soon" },
+  { key: "sso_authentication", name: "SSO Authentication", description: "SAML/OIDC single sign-on for admin users via corporate identity providers (Okta, Azure AD, Google Workspace)", category: "administration", basic: false, premium: "coming_soon" },
 
   { key: "event_dashboard", name: "Event Dashboard", description: "Real-time event overview with check-in stats and progress", category: "analytics", basic: true, premium: true },
   { key: "exportable_reports", name: "Exportable Reports", description: "Export attendee data and check-in reports as CSV or Excel", category: "analytics", basic: true, premium: true },
