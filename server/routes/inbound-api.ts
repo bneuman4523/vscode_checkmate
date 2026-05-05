@@ -198,7 +198,7 @@ export function registerInboundApiRoutes(app: Express): void {
   const inboundLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 60,
-    keyGenerator: (req: InboundRequest) => req.inboundApiKeyId || req.ip || 'unknown',
+    keyGenerator: (req: InboundRequest) => req.inboundApiKeyId || 'unknown',
     message: { error: "Rate limit exceeded. Please slow down." },
     standardHeaders: true,
     legacyHeaders: false,

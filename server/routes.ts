@@ -2077,7 +2077,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const expensiveOpLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 minute
     max: penTestMode ? 100 : 5, // 5 per minute per user
-    keyGenerator: (req) => req.dbUser?.id || req.ip || 'unknown',
+    keyGenerator: (req) => req.dbUser?.id || 'unknown',
     message: { error: "Too many requests. Please wait a moment and try again." },
     standardHeaders: true,
     legacyHeaders: false,

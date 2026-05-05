@@ -1,5 +1,6 @@
 import { createChildLogger } from '../logger';
 import type { Express } from "express";
+import express from "express";
 import { storage } from "../storage";
 import { requireAuth, requireRole, isSuperAdmin } from "../auth";
 import { badgeTemplateResolver } from "../services/badge-template-resolver";
@@ -18,6 +19,9 @@ import {
 } from "./shared";
 
 const logger = createChildLogger('TempStaffRoutes');
+
+// Large body parser for print endpoints (PDF base64 payloads can be several MB)
+const largeBodyParser = express.json({ limit: '10mb' });
 
 export function registerTempStaffRoutes(app: Express): void {
   // Get event sync settings

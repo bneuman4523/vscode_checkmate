@@ -5,6 +5,8 @@ import { storage } from "../storage";
 import { requireAuth, isSuperAdmin } from "../auth";
 import { insertEventWorkflowConfigSchema, insertEventWorkflowStepSchema, insertEventBuyerQuestionSchema, insertEventDisclaimerSchema, insertAttendeeWorkflowResponseSchema } from "@shared/schema";
 import { staffAuth, type StaffRequest } from "./shared";
+import badgeAiRoutes from "./badge-ai";
+import { createAssistantRouter } from "../assistant/route";
 
 const logger = createChildLogger('WorkflowRoutes');
 
