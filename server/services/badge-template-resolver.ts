@@ -204,6 +204,101 @@ export class BadgeTemplateResolver {
 
     return mappings;
   }
+  /**
+   * Apply event-level merge field overrides to a resolved template.
+   * Returns a new template object with overrides applied — does not mutate the original.
+   *
+   * Override operations (applied in order):
+   *   1. remove — filter out base fields by key
+   *   2. replace — swap base field for event-specific field, inheriting position/style
+   *   3. add — append new event-specific fields
+   */
+  applyMergeFieldOverrides(
+    template: BadgeTemplate,
+    badgeSettings: any // Event['badgeSettings']
+  ): BadgeTemplate {
+    if (!badgeSettings) return template;
+
+    const overrides = badgeSettings.mergeFieldOverrides?.[template.id];
+    const backOverrides = badgeSettings.backSideMergeFieldOverrides?.[template.id];
+
+    if (!overrides && !backOverrides) return template;
+
+    // Clone template to avoid mutation
+    const result = { ...template };
+
+    if (overrides && result.mergeFields) {
+      let fields = [...(result.mergeFields as any[])];
+
+      // 1. Remove
+      if (overrides.remove?.length) {
+        const removeSet = new Set(overrides.remove);
+        fields = fields.filter(f => !removeSet.has(f.field));
+      }
+
+      // 2. Replace
+      if (overrides.replace?.length) {
+        for (const replacement of overrides.replace) {
+          const idx = fields.findIndex(f => f.field === replacement.originalField);
+          if (idx !== -1) {
+            fields[idx] = {
+              ...fields[idx],
+              field: replacement.field,
+              label: replacement.label,
+              ...(replacement.fontSize !== undefined && { fontSize: replacement.fontSize }),
+              ...(replacement.position && { position: replacement.position }),
+              ...(replacement.align && { align: replacement.align }),
+              ...(replacement.fontWeight && { fontWeight: replacement.fontWeight }),
+              ...(replacement.color && { color: replacement.color }),
+            };
+          }
+        }
+      }
+
+      // 3. Add
+      if (overrides.add?.length) {
+        fields.push(...overrides.add);
+      }
+
+      result.mergeFields = fields as any;
+    }
+
+    // Same for back side
+    if (backOverrides && result.backSideMergeFields) {
+      let backFields = [...(result.backSideMergeFields as any[])];
+
+      if (backOverrides.remove?.length) {
+        const removeSet = new Set(backOverrides.remove);
+        backFields = backFields.filter(f => !removeSet.has(f.field));
+      }
+
+      if (backOverrides.replace?.length) {
+        for (const replacement of backOverrides.replace) {
+          const idx = backFields.findIndex(f => f.field === replacement.originalField);
+          if (idx !== -1) {
+            backFields[idx] = {
+              ...backFields[idx],
+              field: replacement.field,
+              label: replacement.label,
+              ...(replacement.fontSize !== undefined && { fontSize: replacement.fontSize }),
+              ...(replacement.position && { position: replacement.position }),
+              ...(replacement.align && { align: replacement.align }),
+              ...(replacement.fontWeight && { fontWeight: replacement.fontWeight }),
+              ...(replacement.color && { color: replacement.color }),
+            };
+          }
+        }
+      }
+
+      if (backOverrides.add?.length) {
+        backFields.push(...backOverrides.add);
+      }
+
+      result.backSideMergeFields = backFields as any;
+    }
+
+    return result;
+  }
 }
 
 export const badgeTemplateResolver = new BadgeTemplateResolver();

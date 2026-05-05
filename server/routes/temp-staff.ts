@@ -879,6 +879,7 @@ export function registerTempStaffRoutes(app: Express): void {
         badgePrintedAt: a.badgePrintedAt,
         externalId: a.externalId,
         orderCode: a.orderCode,
+        customFields: a.customFields,
       })));
     } catch (error) {
       logger.error({ err: error }, "Error fetching attendees for temp staff");

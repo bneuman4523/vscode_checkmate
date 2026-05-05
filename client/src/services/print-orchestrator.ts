@@ -206,11 +206,12 @@ class PrintOrchestrator {
           case 'title': return badgeData.title || '';
           case 'participantType': return badgeData.participantType;
           default:
+            if (badgeData.customFields?.[fieldName]) return badgeData.customFields[fieldName];
             if (fieldName.startsWith('customField_')) {
               const key = fieldName.replace('customField_', '');
               return badgeData.customFields?.[key] || '';
             }
-            return badgeData.customFields?.[fieldName] || '';
+            return '';
         }
       };
 
@@ -613,7 +614,10 @@ class PrintOrchestrator {
           value = this.escapeHtml(badgeData.participantType);
           break;
         default:
-          if (field.field.startsWith('customField_')) {
+          // Direct key lookup (cq_ prefixed synced question fields)
+          if (badgeData.customFields?.[field.field]) {
+            value = this.escapeHtml(badgeData.customFields[field.field]);
+          } else if (field.field.startsWith('customField_')) {
             const customFieldKey = field.field.replace('customField_', '');
             value = this.escapeHtml(badgeData.customFields?.[customFieldKey] || '');
           }
@@ -812,6 +816,9 @@ class PrintOrchestrator {
       case 'externalProfileId': return badgeData.customFields?.externalProfileId || '';
       case 'orderCode': return badgeData.orderCode || badgeData.customFields?.orderCode || '';
       default:
+        // Direct key lookup (for cq_ prefixed synced question fields)
+        if (badgeData.customFields?.[fieldName]) return badgeData.customFields[fieldName];
+        // Legacy: strip customField_ prefix for backward compatibility
         if (fieldName.startsWith('customField_')) {
           const key = fieldName.replace('customField_', '');
           return badgeData.customFields?.[key] || '';

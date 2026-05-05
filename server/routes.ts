@@ -2590,6 +2590,89 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =====================
+  // Event Merge Field Overrides (event-level badge field customization)
+  // =====================
+
+  // Get all merge field overrides for an event
+  app.get("/api/events/:eventId/merge-field-overrides", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+      res.json(event.badgeSettings?.mergeFieldOverrides || {});
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching merge field overrides");
+      res.status(500).json({ error: "Failed to fetch merge field overrides" });
+    }
+  });
+
+  // Get merge field overrides for a specific template
+  app.get("/api/events/:eventId/merge-field-overrides/:templateId", requireAuth, async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+      const overrides = event.badgeSettings?.mergeFieldOverrides?.[req.params.templateId] || null;
+      res.json(overrides || { add: [], remove: [], replace: [] });
+    } catch (error) {
+      logger.error({ err: error }, "Error fetching merge field overrides for template");
+      res.status(500).json({ error: "Failed to fetch merge field overrides" });
+    }
+  });
+
+  // Set merge field overrides for a specific template
+  app.put("/api/events/:eventId/merge-field-overrides/:templateId", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const { add, remove, replace } = req.body;
+      const existingSettings = event.badgeSettings || {};
+      const existingOverrides = existingSettings.mergeFieldOverrides || {};
+
+      existingOverrides[req.params.templateId] = {
+        ...(add?.length > 0 && { add }),
+        ...(remove?.length > 0 && { remove }),
+        ...(replace?.length > 0 && { replace }),
+      };
+
+      await storage.updateEvent(event.id, {
+        badgeSettings: {
+          ...existingSettings,
+          mergeFieldOverrides: existingOverrides,
+        },
+      } as any);
+
+      res.json({ success: true, overrides: existingOverrides[req.params.templateId] });
+    } catch (error) {
+      logger.error({ err: error }, "Error saving merge field overrides");
+      res.status(500).json({ error: "Failed to save merge field overrides" });
+    }
+  });
+
+  // Delete merge field overrides for a specific template
+  app.delete("/api/events/:eventId/merge-field-overrides/:templateId", requireAuth, requireRole(['super_admin', 'admin', 'manager']), async (req, res) => {
+    try {
+      const event = await storage.getEvent(req.params.eventId);
+      if (!event) return res.status(404).json({ error: "Event not found" });
+
+      const existingSettings = event.badgeSettings || {};
+      const existingOverrides = { ...(existingSettings.mergeFieldOverrides || {}) };
+      delete existingOverrides[req.params.templateId];
+
+      await storage.updateEvent(event.id, {
+        badgeSettings: {
+          ...existingSettings,
+          mergeFieldOverrides: Object.keys(existingOverrides).length > 0 ? existingOverrides : undefined,
+        },
+      } as any);
+
+      res.json({ success: true });
+    } catch (error) {
+      logger.error({ err: error }, "Error deleting merge field overrides");
+      res.status(500).json({ error: "Failed to delete merge field overrides" });
+    }
+  });
+
+  // =====================
   // Event Configuration Template Routes (One-Touch Setup)
   // =====================
   
@@ -3206,7 +3289,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const result = await badgeTemplateResolver.resolveTemplateForAttendee(attendee, eventId);
-      
+
+      // Apply event-level merge field overrides
+      if (result.template && event.badgeSettings) {
+        result.template = badgeTemplateResolver.applyMergeFieldOverrides(result.template, event.badgeSettings);
+      }
+
       res.json({
         template: result.template,
         resolutionPath: result.resolutionPath,
@@ -3229,7 +3317,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const result = await badgeTemplateResolver.resolveTemplateForParticipantType(eventId, participantType);
-      
+
+      // Apply event-level merge field overrides
+      if (result.template && event.badgeSettings) {
+        result.template = badgeTemplateResolver.applyMergeFieldOverrides(result.template, event.badgeSettings);
+      }
+
       res.json({
         template: result.template,
         resolutionPath: result.resolutionPath,
@@ -5072,14 +5165,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           questionId: q.id,
         }));
 
-      // Legacy custom fields (keep for backward compatibility)
-      const legacy = [
-        { value: "customField_1", label: "Custom Field 1", source: "legacy" },
-        { value: "customField_2", label: "Custom Field 2", source: "legacy" },
-        { value: "customField_3", label: "Custom Field 3", source: "legacy" },
-      ];
-
-      res.json([...builtIn, ...dynamic, ...legacy]);
+      res.json([...builtIn, ...dynamic]);
     } catch (error) {
       logger.error({ err: error }, "Error fetching available merge fields");
       res.status(500).json({ error: "Failed to fetch merge fields" });

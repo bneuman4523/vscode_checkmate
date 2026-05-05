@@ -376,6 +376,56 @@ export const events = pgTable("events", {
       separator?: string;
       includeLabel?: boolean;
     } | null;
+    // Event-level merge field overrides, keyed by badgeTemplateId.
+    // Allows adding event-specific fields (synced questions), removing base fields,
+    // or swapping generic fields for event-specific ones — without duplicating the template.
+    mergeFieldOverrides?: Record<string, {
+      add?: Array<{
+        field: string;
+        label: string;
+        fontSize: number;
+        position: { x: number; y: number };
+        align: 'left' | 'center' | 'right';
+        fontWeight?: string;
+        fontStyle?: 'normal' | 'italic';
+        color?: string;
+        horizontalPadding?: number;
+      }>;
+      remove?: string[]; // Field keys to hide from the base template
+      replace?: Array<{
+        originalField: string; // Base field key to replace
+        field: string;         // New field key (e.g., cq_dietary)
+        label: string;
+        fontSize?: number;
+        position?: { x: number; y: number };
+        align?: 'left' | 'center' | 'right';
+        fontWeight?: string;
+        color?: string;
+      }>;
+    }>;
+    backSideMergeFieldOverrides?: Record<string, {
+      add?: Array<{
+        field: string;
+        label: string;
+        fontSize: number;
+        position: { x: number; y: number };
+        align: 'left' | 'center' | 'right';
+        fontWeight?: string;
+        fontStyle?: 'normal' | 'italic';
+        color?: string;
+      }>;
+      remove?: string[];
+      replace?: Array<{
+        originalField: string;
+        field: string;
+        label: string;
+        fontSize?: number;
+        position?: { x: number; y: number };
+        align?: 'left' | 'center' | 'right';
+        fontWeight?: string;
+        color?: string;
+      }>;
+    }>;
   }>(),
   // Temporary staff access settings
   tempStaffSettings: jsonb("temp_staff_settings").$type<{

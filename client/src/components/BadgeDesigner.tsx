@@ -232,9 +232,6 @@ function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel,
         { value: "participantType", label: "Attendee Type" },
         { value: "externalId", label: "Reg Code" },
         { value: "orderCode", label: "Order Code" },
-        { value: "customField_1", label: "Custom Field 1" },
-        { value: "customField_2", label: "Custom Field 2" },
-        { value: "customField_3", label: "Custom Field 3" },
       ];
 
   const qrEmbedFields = [

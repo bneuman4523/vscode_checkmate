@@ -273,6 +273,8 @@ export default function StaffDashboard() {
       title: attendee.title || undefined,
       participantType: attendee.participantType,
       externalId: attendee.externalId || undefined,
+      orderCode: attendee.orderCode || undefined,
+      customFields: attendee.customFields || undefined,
     };
     const labelRotation = ((template as unknown as Record<string, unknown>).labelRotation || 0) as 0 | 90 | 180 | 270;
 
@@ -283,7 +285,7 @@ export default function StaffDashboard() {
         const token = localStorage.getItem('staffToken');
         if (isZebra) {
           const zplData = networkPrint.generateBadgeZpl(
-            { firstName: attendee.firstName, lastName: attendee.lastName, company: attendee.company || undefined, title: attendee.title || undefined, externalId: attendee.externalId || undefined },
+            { firstName: attendee.firstName, lastName: attendee.lastName, company: attendee.company || undefined, title: attendee.title || undefined, externalId: attendee.externalId || undefined, customFields: attendee.customFields || undefined },
             { width: template.width, height: template.height, includeQR: template.includeQR, qrData: attendee.externalId || `${attendee.firstName}-${attendee.lastName}` },
           );
           const res = await fetch('/api/staff/printnode/print', {
@@ -313,7 +315,7 @@ export default function StaffDashboard() {
           networkPrint.setDpi(dpi);
         }
         const zplData = networkPrint.generateBadgeZpl(
-          { firstName: attendee.firstName, lastName: attendee.lastName, company: attendee.company || undefined, title: attendee.title || undefined, externalId: attendee.externalId || undefined },
+          { firstName: attendee.firstName, lastName: attendee.lastName, company: attendee.company || undefined, title: attendee.title || undefined, externalId: attendee.externalId || undefined, customFields: attendee.customFields || undefined },
           { width: template.width, height: template.height, includeQR: template.includeQR, qrData: attendee.externalId || `${attendee.firstName}-${attendee.lastName}` },
         );
         const result = await networkPrint.printZpl(zplData);
