@@ -13,6 +13,9 @@ vite.config.ts.*
 # Claude VS Code extension artifacts
 claude-vscode-extension/
 
+# Accidental repo copies
+greet/
+
 # Local file uploads
 uploads/
 
