@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Trash2, Upload, Maximize2, Settings2, X, AlignLeft, AlignCenter, AlignRight, Move, Type, Plus, ChevronDown } from 'lucide-react';
+import { Trash2, Upload, Maximize2, Settings2, X, AlignLeft, AlignCenter, AlignRight, Move, Type, Plus, ChevronDown, Lock } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -76,6 +76,8 @@ interface DraggableBadgeCanvasProps {
   watermarkOpacity?: number;
   watermarkPosition?: { x: number; y: number; width: number; height: number; fit: 'cover' | 'contain' | 'stretch' };
   panelLabel?: string;
+  // Event override mode: field keys that are from the base template (locked, non-draggable)
+  lockedFieldKeys?: Set<string>;
 }
 
 interface AlignmentGuide {
@@ -112,6 +114,7 @@ export default function DraggableBadgeCanvas({
   watermarkOpacity = 30,
   watermarkPosition,
   panelLabel,
+  lockedFieldKeys,
 }: DraggableBadgeCanvasProps) {
   const [draggingField, setDraggingField] = useState<number | null>(null);
   const [draggingImage, setDraggingImage] = useState<string | null>(null);
@@ -1161,21 +1164,26 @@ export default function DraggableBadgeCanvas({
                 </Popover>
               ))}
 
-            {mergeFields.map((field, index) => (
-              <Popover 
-                key={index} 
-                open={openFieldPopover === index}
+            {mergeFields.map((field, index) => {
+              const isLocked = lockedFieldKeys?.has(field.field) ?? false;
+              return (
+              <Popover
+                key={index}
+                open={isLocked ? false : openFieldPopover === index}
                 onOpenChange={(open) => {
+                  if (isLocked) return;
                   if (!open) setOpenFieldPopover(null);
                 }}
               >
                 <PopoverTrigger asChild>
                   <div
                     className={`absolute touch-none rounded group/field ${
-                      draggingField === index 
-                        ? 'ring-2 ring-primary bg-primary/20 shadow-xl z-40' 
-                        : openFieldPopover === index 
-                        ? 'ring-2 ring-primary bg-primary/10 shadow-lg' 
+                      isLocked
+                        ? 'border border-dashed border-muted-foreground/30 opacity-60'
+                        : draggingField === index
+                        ? 'ring-2 ring-primary bg-primary/20 shadow-xl z-40'
+                        : openFieldPopover === index
+                        ? 'ring-2 ring-primary bg-primary/10 shadow-lg'
                         : 'hover:bg-primary/5 hover:ring-2 hover:ring-primary/50'
                     }`}
                     style={{
@@ -1208,18 +1216,22 @@ export default function DraggableBadgeCanvas({
                       whiteSpace: 'nowrap',
                       overflow: 'visible',
                       userSelect: 'none',
-                      cursor: draggingField === index ? 'grabbing' : 'grab',
+                      cursor: isLocked ? 'default' : draggingField === index ? 'grabbing' : 'grab',
                       transition: draggingField === index ? 'none' : 'box-shadow 0.15s ease, background 0.15s ease',
                     }}
-                    onPointerDown={(e) => handlePointerDown(e, 'field', index)}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onClick={(e) => handleElementClick(e, 'field', index)}
+                    onPointerDown={(e) => !isLocked && handlePointerDown(e, 'field', index)}
+                    onPointerMove={!isLocked ? handlePointerMove : undefined}
+                    onPointerUp={!isLocked ? handlePointerUp : undefined}
+                    onClick={(e) => !isLocked && handleElementClick(e, 'field', index)}
                     data-testid={`field-${field.field}-${index}`}
                   >
-                    <Move className={`absolute -left-1 -top-1 h-3 w-3 text-primary ${
-                      draggingField === index || openFieldPopover === index ? 'opacity-80' : 'opacity-0 group-hover/field:opacity-50'
-                    } transition-opacity`} />
+                    {isLocked ? (
+                      <Lock className="absolute -left-1 -top-1 h-3 w-3 text-muted-foreground opacity-50" />
+                    ) : (
+                      <Move className={`absolute -left-1 -top-1 h-3 w-3 text-primary ${
+                        draggingField === index || openFieldPopover === index ? 'opacity-80' : 'opacity-0 group-hover/field:opacity-50'
+                      } transition-opacity`} />
+                    )}
                     {field.label}
                     {(openFieldPopover === index || draggingField === index) && (
                       <>
@@ -1242,7 +1254,8 @@ export default function DraggableBadgeCanvas({
                   <FieldPropertiesContent fieldIndex={index} />
                 </PopoverContent>
               </Popover>
-            ))}
+            );
+            })}
 
             {includeQR && (
               <div

@@ -21,19 +21,21 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { 
-  Palette, 
-  Printer, 
+import {
+  Palette,
+  Printer,
   AlertCircle,
   Type,
   Check,
   Plus,
   X,
   Info,
+  Settings2,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import ReadOnlyBadgePreview from "./ReadOnlyBadgePreview";
+import BadgeDesigner from "./BadgeDesigner";
 import type { BadgeTemplate, Event, EventBadgeTemplateOverride } from "@shared/schema";
 import { WEB_SAFE_FONTS, GOOGLE_FONTS } from "@shared/schema";
 
@@ -46,6 +48,7 @@ export default function EventBadgeSetup({ eventId }: EventBadgeSetupProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [selectedTemplateForAdd, setSelectedTemplateForAdd] = useState<string>("");
   const [selectedTypesForAdd, setSelectedTypesForAdd] = useState<string[]>([]);
+  const [customizeTemplate, setCustomizeTemplate] = useState<BadgeTemplate | null>(null);
 
   const { data: event, isLoading: eventLoading } = useQuery<Event>({
     queryKey: ["/api/events", eventId],
@@ -355,6 +358,19 @@ export default function EventBadgeSetup({ eventId }: EventBadgeSetupProps) {
                                 </SelectContent>
                               </Select>
                             </div>
+
+                            <div className="pt-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="text-xs gap-1.5"
+                                onClick={() => setCustomizeTemplate(template)}
+                                data-testid={`button-customize-fields-${template.id}`}
+                              >
+                                <Settings2 className="h-3 w-3" />
+                                Customize Fields
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -548,6 +564,40 @@ export default function EventBadgeSetup({ eventId }: EventBadgeSetupProps) {
               {createOverrideMutation.isPending ? "Adding..." : "Add Assignment"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Customize Fields Dialog — opens BadgeDesigner in event override mode */}
+      <Dialog open={!!customizeTemplate} onOpenChange={(open) => !open && setCustomizeTemplate(null)}>
+        <DialogContent className="max-w-7xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Customize Badge Fields for This Event</DialogTitle>
+            <DialogDescription>
+              Add event-specific merge fields or remove base template fields.
+              Changes only affect this event — the base template stays unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          {customizeTemplate && (
+            <BadgeDesigner
+              templateId={customizeTemplate.id}
+              customerId={customizeTemplate.customerId || undefined}
+              eventId={eventId}
+              eventOverrideMode={true}
+              initialData={customizeTemplate}
+              onSaveOverrides={async (overrides) => {
+                try {
+                  const res = await apiRequest('PUT', `/api/events/${eventId}/merge-field-overrides/${customizeTemplate.id}`, overrides);
+                  if (!res.ok) throw new Error('Failed to save');
+                  toast({ title: "Saved", description: "Event field overrides saved successfully" });
+                  setCustomizeTemplate(null);
+                  queryClient.invalidateQueries({ queryKey: ["/api/events", eventId] });
+                } catch (err) {
+                  toast({ title: "Error", description: "Failed to save field overrides", variant: "destructive" });
+                }
+              }}
+              onCancel={() => setCustomizeTemplate(null)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

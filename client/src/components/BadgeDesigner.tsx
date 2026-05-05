@@ -76,7 +76,9 @@ interface BadgeDesignerProps {
   templateId?: string;
   customerId?: string;
   eventId?: string; // When provided, fetches dynamic merge fields from synced questions
+  eventOverrideMode?: boolean; // When true, saves merge field overrides to event, not template
   onSave?: (template: Partial<BadgeTemplate>) => void;
+  onSaveOverrides?: (overrides: { add?: any[]; remove?: string[]; replace?: any[] }) => void;
   onCancel?: () => void;
   initialData?: any;
   isSaving?: boolean;
@@ -100,7 +102,7 @@ const QUICK_START_PRESETS = [
   { value: "cr80", label: 'ID Card — CR-80 (3.375" × 2.125")', description: "Standard PVC ID card (credit card size)", width: 3.375, height: 2.125 },
 ];
 
-function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel, initialData, isSaving }: BadgeDesignerProps) {
+function BadgeDesignerInner({ templateId, customerId, eventId, eventOverrideMode, onSave, onSaveOverrides, onCancel, initialData, isSaving }: BadgeDesignerProps) {
   const fontContext = useFontsOptional();
   const { trackStart, trackComplete, trackAbandon } = useBehaviorTracking();
   const [name, setName] = useState(initialData?.name || "VIP Badge");
@@ -234,6 +236,11 @@ function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel,
         { value: "orderCode", label: "Order Code" },
       ];
 
+  // In event override mode, base template fields are locked (non-draggable, non-editable)
+  const lockedFieldKeys = eventOverrideMode && initialData?.mergeFields
+    ? new Set((initialData.mergeFields as Array<{ field: string }>).map(f => f.field))
+    : undefined;
+
   const qrEmbedFields = [
     { value: "externalId", label: "Registration Code" },
     { value: "externalProfileId", label: "External Profile ID" },
@@ -343,7 +350,27 @@ function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel,
       backSideAgenda: (layoutMode === 'foldable' || layoutMode === 'dual_side_card') && backSideMode === 'custom' ? backSideAgenda : undefined,
     };
     trackComplete("badge_designer", "save");
-    onSave?.(template);
+
+    if (eventOverrideMode && onSaveOverrides) {
+      // Compute the delta between base template fields and current fields
+      const baseFields = (initialData?.mergeFields || []) as Array<{ field: string }>;
+      const baseFieldKeys = new Set(baseFields.map(f => f.field));
+      const currentFieldKeys = new Set(mergeFields.map(f => f.field));
+
+      const overrides: { add?: any[]; remove?: string[]; replace?: any[] } = {};
+
+      // Fields added (in current but not in base)
+      const added = mergeFields.filter(f => !baseFieldKeys.has(f.field));
+      if (added.length > 0) overrides.add = added;
+
+      // Fields removed (in base but not in current)
+      const removed = baseFields.filter(f => !currentFieldKeys.has(f.field)).map(f => f.field);
+      if (removed.length > 0) overrides.remove = removed;
+
+      onSaveOverrides(overrides);
+    } else {
+      onSave?.(template);
+    }
   };
 
   const applyPreset = (presetValue: string) => {
@@ -369,6 +396,15 @@ function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel,
 
   return (
     <div className="space-y-4">
+      {eventOverrideMode && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-3">
+          <p className="text-sm text-blue-700 dark:text-blue-300">
+            <strong>Event Override Mode</strong> — You're customizing merge fields for this event only.
+            Base template fields are locked (shown dimmed). Add event-specific fields from synced questions,
+            or remove base fields that don't apply to this event.
+          </p>
+        </div>
+      )}
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Left: Tabbed Settings Panel */}
         <div className="lg:w-[480px] lg:shrink-0">
@@ -1306,6 +1342,7 @@ function BadgeDesignerInner({ templateId, customerId, eventId, onSave, onCancel,
                 designWatermark={showWatermark ? designWatermark : null}
                 watermarkOpacity={watermarkOpacity}
                 watermarkPosition={watermarkPosition}
+                lockedFieldKeys={lockedFieldKeys}
               />
 
               {(layoutMode === 'foldable' || layoutMode === 'dual_side_card') && (
