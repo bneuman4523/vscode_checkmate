@@ -169,13 +169,24 @@ echo "  Database reachable at $DB_HOST:$DB_PORT"
 # ─────────────────────────────────────────────────────────────
 # Step 5: Run database migrations
 # ─────────────────────────────────────────────────────────────
+# Migrations run on qa, staging, and production by default.
+# Skipped on development (local dev uses db:push manually).
+# Override with RUN_MIGRATIONS=true or RUN_MIGRATIONS=false.
 
-if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
-  echo "Step 5: Running database migrations"
+if [ -z "$RUN_MIGRATIONS" ]; then
+  # Auto-detect: skip on dev, run on everything else
+  case "${NODE_ENV:-development}" in
+    development) RUN_MIGRATIONS="false" ;;
+    *)           RUN_MIGRATIONS="true" ;;
+  esac
+fi
+
+if [ "$RUN_MIGRATIONS" = "true" ]; then
+  echo "Step 5: Running database migrations (NODE_ENV=${NODE_ENV:-development})"
   npx drizzle-kit push --force
   echo "  Migrations complete"
 else
-  echo "Step 5: SKIP — RUN_MIGRATIONS=false"
+  echo "Step 5: SKIP — RUN_MIGRATIONS=false (NODE_ENV=${NODE_ENV:-development})"
 fi
 
 # ─────────────────────────────────────────────────────────────
