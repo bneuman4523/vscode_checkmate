@@ -36,9 +36,7 @@ RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 appuser
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev --legacy-peer-deps && \
-    npm install drizzle-kit --legacy-peer-deps && \
-    npm cache clean --force
+RUN npm ci --omit=dev --legacy-peer-deps && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/shared ./shared
